@@ -1,0 +1,82 @@
+#!/bin/bash
+
+# ========== MINING POOL RELAY MONITOR ==========
+# Displays real-time status of the relay
+
+set -e
+
+# ========== LOAD CONFIGURATION ==========
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
+	echo "Error: .env file not found in $SCRIPT_DIR"
+	exit 1
+fi
+
+source "$SCRIPT_DIR/.env"
+
+LOG_FILE="$SCRIPT_DIR/logs/relay.log"
+
+# ========== MONITOR LOOP ==========
+while true; do
+	clear
+	echo "========================================"
+	echo "Mining Pool Relay Monitor"
+	echo "========================================"
+	echo
+	
+	echo "Configuration:"
+	echo "  Pool: $POOL_HOST"
+	echo "  Project: $SCRIPT_DIR"
+	echo
+	
+	echo "Pool Connectivity:"
+	echo -n "  ✓ Port $POOL_PORT_1: "
+	timeout 2 bash -c "echo -n '' > /dev/tcp/$POOL_HOST/$POOL_PORT_1" 2>/dev/null && echo "UP" || echo "DOWN"
+	
+	echo -n "  ✓ Port $POOL_PORT_2: "
+	timeout 2 bash -c "echo -n '' > /dev/tcp/$POOL_HOST/$POOL_PORT_2" 2>/dev/null && echo "UP" || echo "DOWN"
+	
+	echo -n "  ✓ Port $POOL_PORT_3: "
+	timeout 2 bash -c "echo -n '' > /dev/tcp/$POOL_HOST/$POOL_PORT_3" 2>/dev/null && echo "UP" || echo "DOWN"
+	echo
+	
+	echo "Relay Service Status:"
+	echo -n "  Service: "
+	if systemctl is-active mining-relay > /dev/null 2>&1; then
+		echo "✓ RUNNING"
+	else
+		echo "✗ STOPPED"
+	fi
+	echo
+	
+	echo "Miner Connections:"
+	echo -n "  Port $PROXY_PORT_1: "
+	ss -tn 2>/dev/null | grep ":$PROXY_PORT_1 " | wc -l
+	echo -n " miner(s) connected"
+	echo
+	
+	echo -n "  Port $PROXY_PORT_2: "
+	ss -tn 2>/dev/null | grep ":$PROXY_PORT_2 " | wc -l
+	echo -n " miner(s) connected"
+	echo
+	
+	echo -n "  Port $PROXY_PORT_3: "
+	ss -tn 2>/dev/null | grep ":$PROXY_PORT_3 " | wc -l
+	echo -n " miner(s) connected"
+	echo
+	
+	echo "Recent Logs:"
+	if [[ -f "$LOG_FILE" ]]; then
+		tail -5 "$LOG_FILE"
+	else
+		echo "  (No logs yet - relay not started)"
+	fi
+	echo
+	
+	echo "========================================"
+	echo "Updated every 5 seconds (Ctrl+C to exit)"
+	echo "========================================"
+	
+	sleep 5
+done

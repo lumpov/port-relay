@@ -36,9 +36,14 @@ if [[ -f /etc/sysctl.d/99-port-relay.conf ]]; then
 fi
 
 if [[ ${#RELAY_ENTRIES[@]} -gt 0 ]]; then
+	echo "Removing UDP NAT rules..."
+	relay_udp_nat_remove
+	echo "Removing conntrack rules..."
+	relay_conntrack_remove
 	echo "Removing firewall rules..."
 	relay_firewall_remove
-	echo "✓ Firewall rules removed"
+	netfilter-persistent save 2>/dev/null || true
+	echo "✓ Firewall and NAT rules removed"
 fi
 
 echo

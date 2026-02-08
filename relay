@@ -2,11 +2,8 @@
 
 # ========== PORT RELAY ==========
 #
-# TCP relay: входящий порт → исходящий хост:порт
-#
-# Клиент подключается к relay_server:53333
-# relay принимает через socat и пересылает на заданный хост:порт
-# Трафик 1:1 без изменений
+# TCP relay: socat (входящий порт → исходящий хост:порт)
+# UDP relay: iptables NAT (настраивается install)
 #
 
 set -e
@@ -18,7 +15,7 @@ source "$SCRIPT_DIR/lib/relay-config"
 load_env || exit 1
 parse_relay_entries
 if [[ ${#RELAY_ENTRIES[@]} -eq 0 ]]; then
-	echo "Error: No valid RELAY_* entries found in .env (format: incoming_port,outgoing_port,outgoing_host)"
+	echo "Error: No valid RELAY_* entries found in .env (format: in_port;out_port;out_host;TCP|UDP)"
 	exit 1
 fi
 check_duplicate_ports || exit 1
@@ -47,10 +44,10 @@ log_msg() {
 log_msg "========================================="
 log_msg "Port Relay Started"
 log_msg "========================================="
-log_msg "Port mapping:"
+log_msg "Port mapping (TCP via socat, UDP via iptables):"
 for entry in "${RELAY_ENTRIES[@]}"; do
-	IFS=':' read -r in_port out_port out_host <<< "$entry"
-	log_msg "  Local :$in_port → $out_host:$out_port"
+	IFS=':' read -r in_port out_port out_host protocol <<< "$entry"
+	log_msg "  Local :$in_port ($protocol) → $out_host:$out_port"
 done
 log_msg "Logging: $ENABLE_LOGGING"
 log_msg "Health Checks: $ENABLE_HEALTH_CHECK"
@@ -59,64 +56,82 @@ log_msg "Health Checks: $ENABLE_HEALTH_CHECK"
 if [[ "$ENABLE_HEALTH_CHECK" == "y" ]]; then
 	log_msg "Performing initial health check..."
 	for entry in "${RELAY_ENTRIES[@]}"; do
-		IFS=':' read -r in_port out_port out_host <<< "$entry"
+		IFS=':' read -r in_port out_port out_host protocol <<< "$entry"
 		if check_target "$out_host" "$out_port" "${HEALTH_CHECK_TIMEOUT:-10}" "${HEALTH_CHECK_RETRIES:-3}"; then
-			log_msg "✓ $out_host:$out_port - REACHABLE"
+			log_msg "✓ $out_host:$out_port ($protocol) - REACHABLE"
 		else
-			log_msg "⚠ $out_host:$out_port - UNREACHABLE (warning)"
+			log_msg "⚠ $out_host:$out_port ($protocol) - UNREACHABLE (warning)"
 		fi
 	done
 fi
 
-# ========== START RELAY INSTANCES ==========
-log_msg "Starting relay instances..."
-
-RELAY_PIDS=()
+# ========== START TCP RELAY INSTANCES (socat) ==========
+TCP_COUNT=0
 for entry in "${RELAY_ENTRIES[@]}"; do
-	IFS=':' read -r in_port out_port out_host <<< "$entry"
-	log_msg "Starting: :$in_port → $out_host:$out_port"
-	socat \
-		TCP4-LISTEN:$in_port,reuseaddr,fork,bind=0.0.0.0,keepalive,keepidle=$KEEPALIVE_IDLE,keepintvl=$KEEPALIVE_INTVL,keepcnt=$KEEPALIVE_CNT \
-		TCP4:$out_host:$out_port,connect-timeout=$CONNECT_TIMEOUT,keepalive,keepidle=$KEEPALIVE_IDLE,keepintvl=$KEEPALIVE_INTVL,keepcnt=$KEEPALIVE_CNT \
-		&
-	RELAY_PIDS+=($!)
-	log_msg "Relay started (PID: ${RELAY_PIDS[-1]})"
+	IFS=':' read -r in_port out_port out_host protocol <<< "$entry"
+	[[ "$protocol" != "TCP" ]] && continue
+	((TCP_COUNT++)) || true
 done
 
-log_msg "All relay instances started!"
+if [[ $TCP_COUNT -gt 0 ]]; then
+	log_msg "Starting TCP relay instances (socat)..."
+	RELAY_PIDS=()
+	for entry in "${RELAY_ENTRIES[@]}"; do
+		IFS=':' read -r in_port out_port out_host protocol <<< "$entry"
+		[[ "$protocol" != "TCP" ]] && continue
+		log_msg "Starting TCP: :$in_port → $out_host:$out_port"
+		socat \
+			TCP4-LISTEN:$in_port,reuseaddr,fork,bind=0.0.0.0,keepalive,keepidle=$KEEPALIVE_IDLE,keepintvl=$KEEPALIVE_INTVL,keepcnt=$KEEPALIVE_CNT \
+			TCP4:$out_host:$out_port,connect-timeout=$CONNECT_TIMEOUT,keepalive,keepidle=$KEEPALIVE_IDLE,keepintvl=$KEEPALIVE_INTVL,keepcnt=$KEEPALIVE_CNT \
+			&
+		RELAY_PIDS+=($!)
+		log_msg "Relay started (PID: ${RELAY_PIDS[-1]})"
+	done
+	log_msg "All TCP relay instances started!"
+fi
+
 log_msg "Relay ready for connections..."
 log_msg "========================================="
 
 cleanup() {
 	local code="${1:-0}"
 	log_msg "Shutting down relay..."
-	for pid in "${RELAY_PIDS[@]}"; do
-		kill -TERM "$pid" 2>/dev/null || true
-	done
-	wait "${RELAY_PIDS[@]}" 2>/dev/null || true
+	if [[ -n "${RELAY_PIDS:-}" ]]; then
+		for pid in "${RELAY_PIDS[@]}"; do
+			kill -TERM "$pid" 2>/dev/null || true
+		done
+		wait "${RELAY_PIDS[@]}" 2>/dev/null || true
+	fi
 	exit "$code"
 }
 trap 'cleanup 0' SIGTERM SIGINT
 
 if [[ "$ENABLE_HEALTH_CHECK" == "y" ]]; then
 	while true; do
-		for pid in "${RELAY_PIDS[@]}"; do
-			if ! kill -0 "$pid" 2>/dev/null; then
-				log_msg "Relay process $pid died, exiting for systemd restart"
-				cleanup 1
-			fi
-		done
+		if [[ -n "${RELAY_PIDS:-}" ]]; then
+			for pid in "${RELAY_PIDS[@]}"; do
+				if ! kill -0 "$pid" 2>/dev/null; then
+					log_msg "Relay process $pid died, exiting for systemd restart"
+					cleanup 1
+				fi
+			done
+		fi
 		sleep 60
 		source "$SCRIPT_DIR/lib/relay-config"
+		load_env 2>/dev/null && parse_relay_entries
 		for entry in "${RELAY_ENTRIES[@]}"; do
-			IFS=':' read -r in_port out_port out_host <<< "$entry"
+			IFS=':' read -r in_port out_port out_host protocol <<< "$entry"
 			if check_target "$out_host" "$out_port" "${HEALTH_CHECK_TIMEOUT:-10}" "${HEALTH_CHECK_RETRIES:-3}"; then
-				log_msg "✓ $out_host:$out_port is UP"
+				log_msg "✓ $out_host:$out_port ($protocol) is UP"
 			else
-				log_msg "⚠ WARNING: $out_host:$out_port is DOWN!"
+				log_msg "⚠ WARNING: $out_host:$out_port ($protocol) is DOWN!"
 			fi
 		done
 	done
 else
-	wait "${RELAY_PIDS[@]}"
+	if [[ -n "${RELAY_PIDS:-}" ]]; then
+		wait "${RELAY_PIDS[@]}"
+	else
+		sleep infinity
+	fi
 fi

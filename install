@@ -24,7 +24,7 @@ echo
 load_env || { echo "Error: .env file not found! Please create .env file first"; exit 1; }
 parse_relay_entries
 if [[ ${#RELAY_ENTRIES[@]} -eq 0 ]]; then
-	echo "Error: No valid RELAY_* entries found in .env (format: incoming_port,outgoing_port,outgoing_host)"
+	echo "Error: No valid RELAY_* entries found in .env (format: in_port;out_port;out_host;TCP|UDP)"
 	exit 1
 fi
 check_duplicate_ports || exit 1
@@ -144,6 +144,8 @@ net.ipv4.tcp_window_scaling=1
 net.ipv4.tcp_mtu_probing=1
 net.ipv4.conf.all.rp_filter=0
 net.ipv4.conf.default.rp_filter=0
+net.ipv4.tcp_slow_start_after_idle=0
+net.netfilter.nf_conntrack_tcp_timeout_established=86400
 EOF
 
 echo "Loading nf_conntrack module (required for nf_conntrack_max)..."
@@ -231,10 +233,15 @@ systemctl enable "$RELAY_SERVICE_NAME"
 echo "✓ Systemd service created: $RELAY_SERVICE_NAME"
 echo
 
-# ========== CONFIGURE FIREWALL ==========
+# ========== CONFIGURE FIREWALL AND NAT ==========
 echo "Configuring firewall rules..."
 
+relay_conntrack_apply
 relay_firewall_apply
+relay_udp_nat_apply "$DEFAULT_IP"
+
+systemctl enable netfilter-persistent 2>/dev/null || true
+netfilter-persistent save 2>/dev/null || true
 
 echo "✓ Firewall rules configured"
 echo
@@ -271,18 +278,28 @@ v=$(sysctl -n net.ipv4.ip_forward 2>/dev/null) && [[ "$v" == "1" ]] && echo "  s
 v=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null) && [[ "$v" == "bbr" ]] && echo "  sysctl tcp_congestion_control: bbr" || { echo "  sysctl tcp_congestion_control: $v"; VERIFY_OK=0; }
 v=$(sysctl -n net.ipv4.tcp_keepalive_time 2>/dev/null) && echo "  sysctl tcp_keepalive_time: $v" || true
 for entry in "${RELAY_ENTRIES[@]}"; do
-	in_port="${entry%%:*}"
-	if iptables -C INPUT -p tcp --dport "$in_port" -j ACCEPT 2>/dev/null; then
-		echo "  iptables ACCEPT tcp dport $in_port: present"
+	IFS=':' read -r in_port out_port out_host protocol <<< "$entry"
+	proto="$(echo "$protocol" | tr '[:upper:]' '[:lower:]')"
+	if iptables -C INPUT -p "$proto" --dport "$in_port" -j ACCEPT 2>/dev/null; then
+		echo "  iptables ACCEPT $proto dport $in_port: present"
 	else
-		echo "  iptables ACCEPT tcp dport $in_port: MISSING"
+		echo "  iptables ACCEPT $proto dport $in_port: MISSING"
 		VERIFY_OK=0
 	fi
-	if ss -tln 2>/dev/null | grep -q ":$in_port "; then
-		echo "  listen :$in_port: OK"
+	if [[ "$protocol" == "TCP" ]]; then
+		if ss -tln 2>/dev/null | grep -q ":$in_port "; then
+			echo "  listen :$in_port (TCP): OK"
+		else
+			echo "  listen :$in_port (TCP): NOT listening"
+			VERIFY_OK=0
+		fi
 	else
-		echo "  listen :$in_port: NOT listening"
-		VERIFY_OK=0
+		if iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "udp dpt:$in_port "; then
+			echo "  udp :$in_port (NAT): OK"
+		else
+			echo "  udp :$in_port (NAT): MISSING"
+			VERIFY_OK=0
+		fi
 	fi
 done
 if [[ $VERIFY_OK -eq 1 ]]; then
@@ -308,11 +325,11 @@ echo "Configuration:"
 echo "  Config: $SCRIPT_DIR/.env"
 echo "  Logs: $SCRIPT_DIR/logs/relay.log"
 echo
-echo "Relays (in_port → out_host:out_port):"
+echo "Relays (in_port [protocol] → out_host:out_port):"
 idx=1
 for entry in "${RELAY_ENTRIES[@]}"; do
-	IFS=':' read -r in_port out_port out_host <<< "$entry"
-	echo "  $idx: $DEFAULT_IP:$in_port → $out_host:$out_port"
+	IFS=':' read -r in_port out_port out_host protocol <<< "$entry"
+	echo "  $idx: $DEFAULT_IP:$in_port [$protocol] → $out_host:$out_port"
 	((idx++))
 done
 echo "  Listen: 0.0.0.0 (all interfaces). Local/VPC address: $DEFAULT_IP"

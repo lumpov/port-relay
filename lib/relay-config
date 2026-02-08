@@ -15,9 +15,12 @@ parse_relay_entries() {
 	RELAY_ENTRIES=()
 	for key in $(printf '%s\n' "${!RELAY_@}" | grep -E '^RELAY_[0-9]+$' | sort -V); do
 		value="${!key}"
-		IFS=',' read -r in_port out_port out_host <<< "$value"
+		IFS=';' read -r in_port out_port out_host protocol <<< "$value"
+		protocol="${protocol:-TCP}"
+		protocol="$(echo "$protocol" | tr '[:lower:]' '[:upper:]')"
+		[[ "$protocol" != "TCP" && "$protocol" != "UDP" ]] && protocol="TCP"
 		if [[ -n "$in_port" && -n "$out_port" && -n "$out_host" ]]; then
-			RELAY_ENTRIES+=("$in_port:$out_port:$out_host")
+			RELAY_ENTRIES+=("$in_port:$out_port:$out_host:$protocol")
 		fi
 	done
 }
@@ -25,12 +28,13 @@ parse_relay_entries() {
 check_duplicate_ports() {
 	local seen=""
 	for entry in "${RELAY_ENTRIES[@]}"; do
-		local in_port="${entry%%:*}"
-		if [[ "$seen" == *" $in_port "* ]]; then
-			echo "Error: Duplicate incoming port $in_port in RELAY_* entries (only one listener per port)"
+		IFS=':' read -r in_port _ _ protocol <<< "$entry"
+		local key="${in_port}:${protocol}"
+		if [[ "$seen" == *" $key "* ]]; then
+			echo "Error: Duplicate incoming port $in_port ($protocol) in RELAY_* entries"
 			return 1
 		fi
-		seen="$seen $in_port "
+		seen="$seen $key "
 	done
 	return 0
 }
@@ -69,19 +73,58 @@ relay_service_disable() {
 	systemctl disable "$RELAY_SERVICE_NAME" 2>/dev/null || true
 }
 
-relay_firewall_remove() {
-	for entry in "${RELAY_ENTRIES[@]}"; do
-		in_port="${entry%%:*}"
-		iptables -D INPUT -p tcp --dport "$in_port" -j ACCEPT 2>/dev/null || true
-	done
-	netfilter-persistent save 2>/dev/null || true
+relay_conntrack_apply() {
+	iptables -w -C INPUT -m conntrack --ctstate INVALID -j DROP 2>/dev/null || iptables -w -I INPUT 1 -m conntrack --ctstate INVALID -j DROP
+	iptables -w -C OUTPUT -m conntrack --ctstate INVALID -j DROP 2>/dev/null || iptables -w -I OUTPUT 1 -m conntrack --ctstate INVALID -j DROP
+	iptables -w -C FORWARD -m conntrack --ctstate INVALID -j DROP 2>/dev/null || iptables -w -I FORWARD 1 -m conntrack --ctstate INVALID -j DROP
+}
+
+relay_conntrack_remove() {
+	iptables -D INPUT -m conntrack --ctstate INVALID -j DROP 2>/dev/null || true
+	iptables -D OUTPUT -m conntrack --ctstate INVALID -j DROP 2>/dev/null || true
+	iptables -D FORWARD -m conntrack --ctstate INVALID -j DROP 2>/dev/null || true
 }
 
 relay_firewall_apply() {
 	for entry in "${RELAY_ENTRIES[@]}"; do
-		in_port="${entry%%:*}"
-		iptables -D INPUT -p tcp --dport "$in_port" -j ACCEPT 2>/dev/null || true
-		iptables -A INPUT -p tcp --dport "$in_port" -j ACCEPT 2>/dev/null || true
+		IFS=':' read -r in_port _ _ protocol <<< "$entry"
+		local proto
+		proto="$(echo "$protocol" | tr '[:upper:]' '[:lower:]')"
+		iptables -D INPUT -p "$proto" --dport "$in_port" -j ACCEPT 2>/dev/null || true
+		iptables -A INPUT -p "$proto" --dport "$in_port" -j ACCEPT 2>/dev/null || true
 	done
-	netfilter-persistent save 2>/dev/null || true
+}
+
+relay_firewall_remove() {
+	for entry in "${RELAY_ENTRIES[@]}"; do
+		IFS=':' read -r in_port _ _ protocol <<< "$entry"
+		local proto
+		proto="$(echo "$protocol" | tr '[:upper:]' '[:lower:]')"
+		iptables -D INPUT -p "$proto" --dport "$in_port" -j ACCEPT 2>/dev/null || true
+	done
+}
+
+relay_udp_nat_apply() {
+	local relay_ip="$1"
+	[[ -z "$relay_ip" ]] && return 1
+	for entry in "${RELAY_ENTRIES[@]}"; do
+		IFS=':' read -r in_port out_port out_host protocol <<< "$entry"
+		[[ "$protocol" != "UDP" ]] && continue
+		iptables -t nat -D PREROUTING -p udp --dport "$in_port" -j DNAT --to-destination "$out_host:$out_port" 2>/dev/null || true
+		iptables -t nat -A PREROUTING -p udp --dport "$in_port" -j DNAT --to-destination "$out_host:$out_port"
+		iptables -t nat -D POSTROUTING -p udp -d "$out_host" --dport "$out_port" -j SNAT --to-source "$relay_ip" 2>/dev/null || true
+		iptables -t nat -A POSTROUTING -p udp -d "$out_host" --dport "$out_port" -j SNAT --to-source "$relay_ip"
+	done
+}
+
+relay_udp_nat_remove() {
+	local relay_ip
+	relay_ip="$(ip route get 1.2.3.4 2>/dev/null | awk '{print $7; exit}')"
+	[[ -z "$relay_ip" ]] && relay_ip="0.0.0.0"
+	for entry in "${RELAY_ENTRIES[@]}"; do
+		IFS=':' read -r in_port out_port out_host protocol <<< "$entry"
+		[[ "$protocol" != "UDP" ]] && continue
+		iptables -t nat -D PREROUTING -p udp --dport "$in_port" -j DNAT --to-destination "$out_host:$out_port" 2>/dev/null || true
+		iptables -t nat -D POSTROUTING -p udp -d "$out_host" --dport "$out_port" -j SNAT --to-source "$relay_ip" 2>/dev/null || true
+	done
 }

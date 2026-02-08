@@ -6,7 +6,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/lib/relay-config.sh"
+source "$SCRIPT_DIR/lib/relay-config"
 
 if [[ "$EUID" -ne 0 ]]; then
 	echo "Error: This script requires root privileges"

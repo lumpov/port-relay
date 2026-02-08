@@ -7,7 +7,7 @@ set -e
 
 # ========== LOAD CONFIGURATION ==========
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/lib/relay-config.sh"
+source "$SCRIPT_DIR/lib/relay-config"
 
 load_env || exit 1
 parse_relay_entries

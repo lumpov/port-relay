@@ -2,21 +2,21 @@
 
 Два скрипта для машины с Linux (Fedora), которая раздаёт интернет майнеру через модем.
 
-## 1. collect-info.sh — сбор диагностики
+## 1. collect-info — сбор диагностики
 
 Запуск без root (часть данных будет неполной без root):
 
 ```bash
-./collect-info.sh
+./collect-info
 ```
 
 Вывод в консоль. Результат можно сохранить и отправить для анализа:
 
 ```bash
-./collect-info.sh 2>&1 | tee router-info.txt
+./collect-info 2>&1 | tee router-info.txt
 ```
 
-## 2. apply-tune.sh — применение настроек
+## 2. apply-tune — применение настроек
 
 - **MSS clamping** для проходящего трафика (меньше фрагментации на медленном канале).
 - **fq_codel** на WAN-интерфейсе (без жёсткого лимита скорости — подходит при разной связи).
@@ -25,15 +25,15 @@
 Запуск (нужен root):
 
 ```bash
-sudo ./apply-tune.sh
+sudo ./apply-tune
 ```
 
 WAN-интерфейс берётся из default route. Или явно:
 
 ```bash
-sudo ./apply-tune.sh ppp0
+sudo ./apply-tune ppp0
 # или
-sudo WAN_IF=ppp0 ./apply-tune.sh
+sudo WAN_IF=ppp0 ./apply-tune
 ```
 
 После переподключения модема (down/up интерфейса) qdisc сбрасывается — перезапустите скрипт или настройте его запуск при поднятии интерфейса (ppp hook, NetworkManager dispatcher, systemd path).

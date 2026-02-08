@@ -1,7 +1,7 @@
 #!/bin/bash
 # Настройка PC-маршрутизатора (Fedora): очередь fq_codel на WAN, MSS clamping, базовый sysctl.
 # Скорость канала не задаётся — fq_codel без лимита подстраивается под канал.
-# Запуск: sudo ./apply-tune.sh [интерфейс_wan]
+# Запуск: sudo ./apply-tune [интерфейс_wan]
 # Интерфейс можно задать аргументом или WAN_IF=ppp0; иначе берётся из default route.
 
 set -e

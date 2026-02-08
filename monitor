@@ -74,7 +74,7 @@ while true; do
 		echo "  ... and $((RELAY_TOTAL - RELAY_DISPLAY_MAX)) more ($RELAY_TOTAL total)"
 	fi
 	echo
-	echo "Recent Logs:"
+	echo "Recent Logs (from relay daemon; restart relay after config change):"
 	if [[ -f "$LOG_FILE" ]]; then
 		tail -5 "$LOG_FILE"
 	else

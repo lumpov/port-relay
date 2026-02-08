@@ -242,7 +242,7 @@ echo
 # ========== START SERVICE ==========
 echo "Starting relay service..."
 
-systemctl start "$RELAY_SERVICE_NAME"
+systemctl restart "$RELAY_SERVICE_NAME"
 
 sleep 2
 

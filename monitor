@@ -7,22 +7,10 @@ set -e
 
 # ========== LOAD CONFIGURATION ==========
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/relay-config.sh"
 
-if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
-	echo "Error: .env file not found in $SCRIPT_DIR"
-	exit 1
-fi
-
-source "$SCRIPT_DIR/.env"
-
-RELAY_ENTRIES=()
-for key in $(printf '%s\n' "${!RELAY_@}" | grep -E '^RELAY_[0-9]+$' | sort -V); do
-	value="${!key}"
-	IFS=',' read -r in_port out_port out_host <<< "$value"
-	if [[ -n "$in_port" && -n "$out_port" && -n "$out_host" ]]; then
-		RELAY_ENTRIES+=("$in_port:$out_port:$out_host")
-	fi
-done
+load_env || exit 1
+parse_relay_entries
 
 LOG_FILE="$SCRIPT_DIR/logs/relay.log"
 
@@ -42,7 +30,7 @@ while true; do
 	for entry in "${RELAY_ENTRIES[@]}"; do
 		IFS=':' read -r in_port out_port out_host <<< "$entry"
 		echo -n "  ✓ $out_host:$out_port: "
-		timeout 2 bash -c "echo -n '' > /dev/tcp/$out_host/$out_port" 2>/dev/null && echo "UP" || echo "DOWN"
+		check_target "$out_host" "$out_port" 2 && echo "UP" || echo "DOWN"
 	done
 	echo
 	

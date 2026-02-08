@@ -6,23 +6,14 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/relay-config.sh"
 
 if [[ "$EUID" -ne 0 ]]; then
 	echo "Error: This script requires root privileges"
 	exit 1
 fi
 
-if [[ -f "$SCRIPT_DIR/.env" ]]; then
-	source "$SCRIPT_DIR/.env"
-	RELAY_ENTRIES=()
-	for key in $(printf '%s\n' "${!RELAY_@}" | grep -E '^RELAY_[0-9]+$' | sort -V); do
-		value="${!key}"
-		IFS=',' read -r in_port out_port out_host <<< "$value"
-		if [[ -n "$in_port" && -n "$out_port" && -n "$out_host" ]]; then
-			RELAY_ENTRIES+=("$in_port:$out_port:$out_host")
-		fi
-	done
-fi
+load_env 2>/dev/null && parse_relay_entries || RELAY_ENTRIES=()
 
 echo "Stopping port-relay..."
 systemctl stop port-relay 2>/dev/null || true

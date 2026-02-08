@@ -13,32 +13,18 @@ set -e
 
 # ========== LOAD CONFIGURATION ==========
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/relay-config.sh"
 
-if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
-	echo "Error: .env file not found in $SCRIPT_DIR"
-	exit 1
-fi
-
-source "$SCRIPT_DIR/.env"
-
-# ========== CREATE LOGS DIRECTORY ==========
-mkdir -p "$SCRIPT_DIR/logs"
-LOG_FILE="$SCRIPT_DIR/logs/relay.log"
-
-# ========== PARSE RELAY CONFIGURATION ==========
-RELAY_ENTRIES=()
-for key in $(printf '%s\n' "${!RELAY_@}" | grep -E '^RELAY_[0-9]+$' | sort -V); do
-	value="${!key}"
-	IFS=',' read -r in_port out_port out_host <<< "$value"
-	if [[ -n "$in_port" && -n "$out_port" && -n "$out_host" ]]; then
-		RELAY_ENTRIES+=("$in_port:$out_port:$out_host")
-	fi
-done
-
+load_env || exit 1
+parse_relay_entries
 if [[ ${#RELAY_ENTRIES[@]} -eq 0 ]]; then
 	echo "Error: No valid RELAY_* entries found in .env (format: incoming_port,outgoing_port,outgoing_host)"
 	exit 1
 fi
+
+# ========== CREATE LOGS DIRECTORY ==========
+mkdir -p "$SCRIPT_DIR/logs"
+LOG_FILE="$SCRIPT_DIR/logs/relay.log"
 
 CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-15}"
 KEEPALIVE_IDLE="${KEEPALIVE_IDLE:-30}"
@@ -53,18 +39,6 @@ log_msg() {
 		echo "$msg" | tee -a "$LOG_FILE"
 	else
 		echo "$msg"
-	fi
-}
-
-# ========== HEALTH CHECK FUNCTION ==========
-check_target() {
-	local host="$1"
-	local port="$2"
-	
-	if timeout 5 bash -c "echo -n '' > /dev/tcp/$host/$port" 2>/dev/null; then
-		return 0
-	else
-		return 1
 	fi
 }
 
@@ -85,7 +59,7 @@ if [[ "$ENABLE_HEALTH_CHECK" == "y" ]]; then
 	log_msg "Performing initial health check..."
 	for entry in "${RELAY_ENTRIES[@]}"; do
 		IFS=':' read -r in_port out_port out_host <<< "$entry"
-		if check_target "$out_host" "$out_port"; then
+		if check_target "$out_host" "$out_port" 5; then
 			log_msg "✓ $out_host:$out_port - REACHABLE"
 		else
 			log_msg "⚠ $out_host:$out_port - UNREACHABLE (warning)"
@@ -118,7 +92,7 @@ if [[ "$ENABLE_HEALTH_CHECK" == "y" ]]; then
 		sleep 60
 		for entry in "${RELAY_ENTRIES[@]}"; do
 			IFS=':' read -r in_port out_port out_host <<< "$entry"
-			if ! check_target "$out_host" "$out_port"; then
+			if ! check_target "$out_host" "$out_port" 5; then
 				log_msg "⚠ WARNING: $out_host:$out_port is DOWN!"
 			fi
 		done

@@ -108,7 +108,6 @@ if [[ "$ENABLE_HEALTH_CHECK" == "y" ]]; then
 		done
 		sleep 60
 		source "$SCRIPT_DIR/lib/relay-config"
-		export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 		for entry in "${RELAY_ENTRIES[@]}"; do
 			IFS=':' read -r in_port out_port out_host <<< "$entry"
 			if check_target "$out_host" "$out_port" "${HEALTH_CHECK_TIMEOUT:-10}" "${HEALTH_CHECK_RETRIES:-3}"; then

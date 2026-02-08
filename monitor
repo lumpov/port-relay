@@ -23,7 +23,7 @@ if [[ "$RELAY_DISPLAY_MAX" -lt 1 ]]; then
 fi
 
 while true; do
-	clear
+	clear 2>/dev/null || true
 	echo "========================================"
 	echo "Port Relay Monitor"
 	echo "========================================"
@@ -31,6 +31,10 @@ while true; do
 	echo "Configuration:"
 	echo "  Project: $SCRIPT_DIR"
 	echo "  Relays: $RELAY_TOTAL total"
+	if [[ -n "${RELAY_DEBUG:-}" ]]; then
+		echo "  [DEBUG] PATH=$PATH"
+		echo "  [DEBUG] nc=$(command -v nc 2>/dev/null || echo 'not found'); timeout=$(command -v timeout 2>/dev/null || echo 'not found'); bash=$(command -v bash 2>/dev/null || echo 'not found')"
+	fi
 	echo
 	echo "Outbound Connectivity:"
 	idx=0
@@ -43,6 +47,19 @@ while true; do
 	done
 	if [[ $RELAY_TOTAL -gt $RELAY_DISPLAY_MAX ]]; then
 		echo "  ... and $((RELAY_TOTAL - RELAY_DISPLAY_MAX)) more ($RELAY_TOTAL total)"
+	fi
+	echo
+	echo "Health (same check as relay daemon):"
+	idx=0
+	for entry in "${RELAY_ENTRIES[@]}"; do
+		[[ $idx -ge $RELAY_DISPLAY_MAX ]] && break
+		IFS=':' read -r in_port out_port out_host <<< "$entry"
+		echo -n "  ✓ $out_host:$out_port: "
+		check_target "$out_host" "$out_port" "${HEALTH_CHECK_TIMEOUT:-10}" "${HEALTH_CHECK_RETRIES:-3}" && echo "UP" || echo "DOWN"
+		((idx++)) || true
+	done
+	if [[ $RELAY_TOTAL -gt $RELAY_DISPLAY_MAX ]]; then
+		echo "  ... and $((RELAY_TOTAL - RELAY_DISPLAY_MAX)) more"
 	fi
 	echo
 	echo "Relay Service Status:"

@@ -1,2 +1,3 @@
 .localdev
 .env
+logs/

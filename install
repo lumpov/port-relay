@@ -335,9 +335,9 @@ done
 echo "  Listen: 0.0.0.0 (all interfaces). Local/VPC address: $DEFAULT_IP"
 PUBLIC_IP="$(curl -s --max-time 3 -4 ifconfig.me 2>/dev/null || true)"
 if [[ -n "$PUBLIC_IP" ]]; then
-	echo "  For miners from internet use PUBLIC IP: $PUBLIC_IP (open relay ports in cloud Security Groups)"
+	echo "  For clients from internet use PUBLIC IP: $PUBLIC_IP"
 else
-	echo "  For miners from internet use this host PUBLIC IP (open relay ports in cloud Security Groups)"
+	echo "  For clients from internet use this host PUBLIC IP"
 fi
 echo
 echo "Useful Commands:"

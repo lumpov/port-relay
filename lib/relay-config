@@ -104,16 +104,31 @@ relay_firewall_remove() {
 	done
 }
 
+resolve_host_to_ip() {
+	local host="$1"
+	[[ -z "$host" ]] && return 1
+	if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+		echo "$host"
+		return 0
+	fi
+	local ip
+	ip=$(getent ahostsv4 "$host" 2>/dev/null | awk '/STREAM/ {print $1; exit}')
+	[[ -z "$ip" ]] && ip=$(getent hosts "$host" 2>/dev/null | awk '{print $1; exit}')
+	[[ -n "$ip" ]] && echo "$ip" || return 1
+}
+
 relay_udp_nat_apply() {
 	local relay_ip="$1"
 	[[ -z "$relay_ip" ]] && return 1
 	for entry in "${RELAY_ENTRIES[@]}"; do
 		IFS=':' read -r in_port out_port out_host protocol <<< "$entry"
 		[[ "$protocol" != "UDP" ]] && continue
-		iptables -t nat -D PREROUTING -p udp --dport "$in_port" -j DNAT --to-destination "$out_host:$out_port" 2>/dev/null || true
-		iptables -t nat -A PREROUTING -p udp --dport "$in_port" -j DNAT --to-destination "$out_host:$out_port"
-		iptables -t nat -D POSTROUTING -p udp -d "$out_host" --dport "$out_port" -j SNAT --to-source "$relay_ip" 2>/dev/null || true
-		iptables -t nat -A POSTROUTING -p udp -d "$out_host" --dport "$out_port" -j SNAT --to-source "$relay_ip"
+		local out_ip
+		out_ip=$(resolve_host_to_ip "$out_host") || { echo "Error: cannot resolve '$out_host' to IP (required for iptables UDP NAT)"; return 1; }
+		iptables -t nat -D PREROUTING -p udp --dport "$in_port" -j DNAT --to-destination "$out_ip:$out_port" 2>/dev/null || true
+		iptables -t nat -A PREROUTING -p udp --dport "$in_port" -j DNAT --to-destination "$out_ip:$out_port"
+		iptables -t nat -D POSTROUTING -p udp -d "$out_ip" --dport "$out_port" -j SNAT --to-source "$relay_ip" 2>/dev/null || true
+		iptables -t nat -A POSTROUTING -p udp -d "$out_ip" --dport "$out_port" -j SNAT --to-source "$relay_ip"
 	done
 }
 
@@ -124,7 +139,9 @@ relay_udp_nat_remove() {
 	for entry in "${RELAY_ENTRIES[@]}"; do
 		IFS=':' read -r in_port out_port out_host protocol <<< "$entry"
 		[[ "$protocol" != "UDP" ]] && continue
-		iptables -t nat -D PREROUTING -p udp --dport "$in_port" -j DNAT --to-destination "$out_host:$out_port" 2>/dev/null || true
-		iptables -t nat -D POSTROUTING -p udp -d "$out_host" --dport "$out_port" -j SNAT --to-source "$relay_ip" 2>/dev/null || true
+		local out_ip
+		out_ip=$(resolve_host_to_ip "$out_host") || continue
+		iptables -t nat -D PREROUTING -p udp --dport "$in_port" -j DNAT --to-destination "$out_ip:$out_port" 2>/dev/null || true
+		iptables -t nat -D POSTROUTING -p udp -d "$out_ip" --dport "$out_port" -j SNAT --to-source "$relay_ip" 2>/dev/null || true
 	done
 }

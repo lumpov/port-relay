@@ -256,6 +256,44 @@ fi
 
 echo
 
+# ========== VERIFICATION ==========
+echo "========================================"
+echo "Verification (applied settings)"
+echo "========================================"
+VERIFY_OK=1
+if systemctl is-active "$RELAY_SERVICE_NAME" > /dev/null 2>&1; then
+	echo "  Service: $RELAY_SERVICE_NAME active"
+else
+	echo "  Service: $RELAY_SERVICE_NAME NOT active"
+	VERIFY_OK=0
+fi
+v=$(sysctl -n net.ipv4.ip_forward 2>/dev/null) && [[ "$v" == "1" ]] && echo "  sysctl net.ipv4.ip_forward: 1" || { echo "  sysctl net.ipv4.ip_forward: not 1 (got $v)"; VERIFY_OK=0; }
+v=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null) && [[ "$v" == "bbr" ]] && echo "  sysctl tcp_congestion_control: bbr" || { echo "  sysctl tcp_congestion_control: $v"; VERIFY_OK=0; }
+v=$(sysctl -n net.ipv4.tcp_keepalive_time 2>/dev/null) && echo "  sysctl tcp_keepalive_time: $v" || true
+for entry in "${RELAY_ENTRIES[@]}"; do
+	in_port="${entry%%:*}"
+	if iptables -C INPUT -p tcp --dport "$in_port" -j ACCEPT 2>/dev/null; then
+		echo "  iptables ACCEPT tcp dport $in_port: present"
+	else
+		echo "  iptables ACCEPT tcp dport $in_port: MISSING"
+		VERIFY_OK=0
+	fi
+	if ss -tln 2>/dev/null | grep -q ":$in_port "; then
+		echo "  listen :$in_port: OK"
+	else
+		echo "  listen :$in_port: NOT listening"
+		VERIFY_OK=0
+	fi
+done
+if [[ $VERIFY_OK -eq 1 ]]; then
+	echo "  Result: all checks passed"
+else
+	echo "  Result: some checks failed (review above)"
+fi
+echo "  Profile: relay tuned for unstable links (BBR, keepalive, buffers)"
+echo "========================================"
+echo
+
 # ========== FINAL OUTPUT ==========
 echo "========================================"
 echo "✓ Install Complete!"

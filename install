@@ -32,6 +32,32 @@ echo "Configuration loaded from: $SCRIPT_DIR/.env"
 echo "Relay mappings: ${#RELAY_ENTRIES[@]}"
 echo
 
+# ========== SYSTEM INFORMATION (FOR ANALYSIS) ==========
+echo "========================================"
+echo "System information"
+echo "========================================"
+echo "OS: $(lsb_release -si) $(lsb_release -sr) ($(lsb_release -sc))"
+echo "Kernel: $(uname -r)"
+echo "Arch: $(uname -m)"
+echo "Hostname: $(hostname)"
+echo "Uptime: $(uptime -p 2>/dev/null || cat /proc/uptime | awk '{printf "%dd %dh %dm", $1/86400, ($1%86400)/3600, ($1%3600)/60}')"
+DEFAULT_INTERFACE_PRE="$(ip route get 1.2.3.4 2>/dev/null | awk '{print $5; exit}')"
+DEFAULT_IP_PRE="$(ip route get 1.2.3.4 2>/dev/null | awk '{print $7; exit}')"
+echo "Default route interface: ${DEFAULT_INTERFACE_PRE:-n/a}"
+echo "Default route IP: ${DEFAULT_IP_PRE:-n/a}"
+if lsmod 2>/dev/null | grep -q '^nf_conntrack'; then
+	echo "nf_conntrack: loaded"
+else
+	echo "nf_conntrack: not loaded"
+fi
+if [[ -f /proc/sys/net/netfilter/nf_conntrack_max ]]; then
+	echo "nf_conntrack_max (current): $(cat /proc/sys/net/netfilter/nf_conntrack_max)"
+else
+	echo "nf_conntrack_max: not available (module not loaded or not present)"
+fi
+echo "========================================"
+echo
+
 # ========== SYSTEM CHECKS ==========
 echo "Checking system requirements..."
 
@@ -98,9 +124,9 @@ net.ipv4.tcp_rmem=16384 262144 16777216
 net.ipv4.tcp_wmem=16384 262144 16777216
 
 # ========== KEEP-ALIVE (CRITICAL FOR UNRELIABLE NETWORKS) ==========
-net.ipv4.tcp_keepalives_time=45
-net.ipv4.tcp_keepalives_intvl=10
-net.ipv4.tcp_keepalives_probes=3
+net.ipv4.tcp_keepalive_time=45
+net.ipv4.tcp_keepalive_intvl=10
+net.ipv4.tcp_keepalive_probes=3
 
 # ========== CONNECTION HANDLING ==========
 net.netfilter.nf_conntrack_max=131072
@@ -119,7 +145,33 @@ net.ipv4.conf.all.rp_filter=0
 net.ipv4.conf.default.rp_filter=0
 EOF
 
-sysctl -p /etc/sysctl.d/99-port-relay.conf > /dev/null
+echo "Loading nf_conntrack module (required for nf_conntrack_max)..."
+if modprobe nf_conntrack 2>&1; then
+	echo "modprobe nf_conntrack: OK"
+else
+	echo "modprobe nf_conntrack: FAILED or not available (nf_conntrack_max will not apply)"
+fi
+
+echo "Applying sysctl from /etc/sysctl.d/99-port-relay.conf ..."
+set +e
+sysctl -p /etc/sysctl.d/99-port-relay.conf
+SYSCTL_EXIT=$?
+set -e
+if [[ $SYSCTL_EXIT -ne 0 ]]; then
+	echo "Warning: sysctl reported errors (exit $SYSCTL_EXIT). Check lines above for missing or read-only parameters."
+fi
+
+echo "Current key parameters (for verification):"
+for k in net.ipv4.ip_forward net.core.default_qdisc net.ipv4.tcp_congestion_control \
+	net.ipv4.tcp_keepalive_time net.ipv4.tcp_keepalive_intvl net.ipv4.tcp_keepalive_probes \
+	net.core.somaxconn net.ipv4.tcp_max_syn_backlog; do
+	v=$(sysctl -n "$k" 2>/dev/null) && echo "  $k = $v" || echo "  $k = (not available)"
+done
+if [[ -f /proc/sys/net/netfilter/nf_conntrack_max ]]; then
+	echo "  net.netfilter.nf_conntrack_max = $(cat /proc/sys/net/netfilter/nf_conntrack_max)"
+else
+	echo "  net.netfilter.nf_conntrack_max = (not available)"
+fi
 
 echo "✓ Kernel parameters configured"
 echo

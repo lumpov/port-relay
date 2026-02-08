@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# ========== PORT RELAY UNINSTALL ==========
+# Stops service, removes systemd unit and sysctl config
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ "$EUID" -ne 0 ]]; then
+	echo "Error: This script requires root privileges"
+	exit 1
+fi
+
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+	source "$SCRIPT_DIR/.env"
+	RELAY_ENTRIES=()
+	for key in $(printf '%s\n' "${!RELAY_@}" | grep -E '^RELAY_[0-9]+$' | sort -V); do
+		value="${!key}"
+		IFS=',' read -r in_port out_port out_host <<< "$value"
+		if [[ -n "$in_port" && -n "$out_port" && -n "$out_host" ]]; then
+			RELAY_ENTRIES+=("$in_port:$out_port:$out_host")
+		fi
+	done
+fi
+
+echo "Stopping port-relay..."
+systemctl stop port-relay 2>/dev/null || true
+
+echo "Disabling port-relay..."
+systemctl disable port-relay 2>/dev/null || true
+
+if [[ -f /etc/systemd/system/port-relay.service ]]; then
+	echo "Removing systemd service..."
+	rm -f /etc/systemd/system/port-relay.service
+	systemctl daemon-reload
+	echo "✓ Service removed"
+fi
+
+if [[ -f /etc/sysctl.d/99-port-relay.conf ]]; then
+	echo "Removing sysctl config..."
+	rm -f /etc/sysctl.d/99-port-relay.conf
+	sysctl -p 2>/dev/null || true
+	echo "✓ Sysctl config removed"
+fi
+
+if [[ ${#RELAY_ENTRIES[@]} -gt 0 ]]; then
+	echo "Removing firewall rules..."
+	for entry in "${RELAY_ENTRIES[@]}"; do
+		in_port="${entry%%:*}"
+		iptables -D INPUT -p tcp --dport "$in_port" -j ACCEPT 2>/dev/null || true
+	done
+	netfilter-persistent save 2>/dev/null || true
+	echo "✓ Firewall rules removed"
+fi
+
+echo
+echo "✓ Uninstall complete. Project files in $SCRIPT_DIR left intact."

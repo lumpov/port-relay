@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# ========== MINING POOL RELAY MONITOR ==========
+# ========== PORT RELAY MONITOR ==========
 # Displays real-time status of the relay
 
 set -e
@@ -15,56 +15,53 @@ fi
 
 source "$SCRIPT_DIR/.env"
 
+RELAY_ENTRIES=()
+for key in $(printf '%s\n' "${!RELAY_@}" | grep -E '^RELAY_[0-9]+$' | sort -V); do
+	value="${!key}"
+	IFS=',' read -r in_port out_port out_host <<< "$value"
+	if [[ -n "$in_port" && -n "$out_port" && -n "$out_host" ]]; then
+		RELAY_ENTRIES+=("$in_port:$out_port:$out_host")
+	fi
+done
+
 LOG_FILE="$SCRIPT_DIR/logs/relay.log"
 
 # ========== MONITOR LOOP ==========
 while true; do
 	clear
 	echo "========================================"
-	echo "Mining Pool Relay Monitor"
+	echo "Port Relay Monitor"
 	echo "========================================"
 	echo
 	
 	echo "Configuration:"
-	echo "  Pool: $POOL_HOST"
 	echo "  Project: $SCRIPT_DIR"
 	echo
 	
-	echo "Pool Connectivity:"
-	echo -n "  ✓ Port $POOL_PORT_1: "
-	timeout 2 bash -c "echo -n '' > /dev/tcp/$POOL_HOST/$POOL_PORT_1" 2>/dev/null && echo "UP" || echo "DOWN"
-	
-	echo -n "  ✓ Port $POOL_PORT_2: "
-	timeout 2 bash -c "echo -n '' > /dev/tcp/$POOL_HOST/$POOL_PORT_2" 2>/dev/null && echo "UP" || echo "DOWN"
-	
-	echo -n "  ✓ Port $POOL_PORT_3: "
-	timeout 2 bash -c "echo -n '' > /dev/tcp/$POOL_HOST/$POOL_PORT_3" 2>/dev/null && echo "UP" || echo "DOWN"
+	echo "Outbound Connectivity:"
+	for entry in "${RELAY_ENTRIES[@]}"; do
+		IFS=':' read -r in_port out_port out_host <<< "$entry"
+		echo -n "  ✓ $out_host:$out_port: "
+		timeout 2 bash -c "echo -n '' > /dev/tcp/$out_host/$out_port" 2>/dev/null && echo "UP" || echo "DOWN"
+	done
 	echo
 	
 	echo "Relay Service Status:"
 	echo -n "  Service: "
-	if systemctl is-active mining-relay > /dev/null 2>&1; then
+	if systemctl is-active port-relay > /dev/null 2>&1; then
 		echo "✓ RUNNING"
 	else
 		echo "✗ STOPPED"
 	fi
 	echo
 	
-	echo "Miner Connections:"
-	echo -n "  Port $PROXY_PORT_1: "
-	ss -tn 2>/dev/null | grep ":$PROXY_PORT_1 " | wc -l
-	echo -n " miner(s) connected"
-	echo
-	
-	echo -n "  Port $PROXY_PORT_2: "
-	ss -tn 2>/dev/null | grep ":$PROXY_PORT_2 " | wc -l
-	echo -n " miner(s) connected"
-	echo
-	
-	echo -n "  Port $PROXY_PORT_3: "
-	ss -tn 2>/dev/null | grep ":$PROXY_PORT_3 " | wc -l
-	echo -n " miner(s) connected"
-	echo
+	echo "Connections per relay:"
+	for entry in "${RELAY_ENTRIES[@]}"; do
+		in_port="${entry%%:*}"
+		count=$(ss -tn 2>/dev/null | grep ":$in_port " | wc -l)
+		echo -n "  Port $in_port: $count connection(s)"
+		echo
+	done
 	
 	echo "Recent Logs:"
 	if [[ -f "$LOG_FILE" ]]; then

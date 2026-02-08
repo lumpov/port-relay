@@ -1,15 +1,12 @@
 #!/bin/bash
 
-# ========== MINING POOL RELAY SETUP ==========
-# 
-# Installation script that:
+# ========== PORT RELAY INSTALL ==========
+#
 # 1. Checks system requirements
 # 2. Installs dependencies (socat, etc)
 # 3. Configures kernel parameters (sysctl)
-# 4. Creates systemd service
+# 4. Creates systemd service port-relay
 # 5. Starts the relay
-#
-# The actual relay binary handles TCP forwarding
 #
 
 set -e
@@ -19,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo
 echo "========================================"
-echo "Mining Pool Relay Setup"
+echo "Port Relay Install"
 echo "========================================"
 echo
 
@@ -31,9 +28,22 @@ fi
 
 source "$SCRIPT_DIR/.env"
 
+RELAY_ENTRIES=()
+for key in $(printf '%s\n' "${!RELAY_@}" | grep -E '^RELAY_[0-9]+$' | sort -V); do
+	value="${!key}"
+	IFS=',' read -r in_port out_port out_host <<< "$value"
+	if [[ -n "$in_port" && -n "$out_port" && -n "$out_host" ]]; then
+		RELAY_ENTRIES+=("$in_port:$out_port:$out_host")
+	fi
+done
+
+if [[ ${#RELAY_ENTRIES[@]} -eq 0 ]]; then
+	echo "Error: No valid RELAY_* entries found in .env (format: incoming_port,outgoing_port,outgoing_host)"
+	exit 1
+fi
+
 echo "Configuration loaded from: $SCRIPT_DIR/.env"
-echo "Pool: $POOL_HOST"
-echo "Relay Ports: $PROXY_PORT_1, $PROXY_PORT_2, $PROXY_PORT_3"
+echo "Relay mappings: ${#RELAY_ENTRIES[@]}"
 echo
 
 # ========== SYSTEM CHECKS ==========
@@ -85,10 +95,10 @@ echo "✓ Dependencies installed"
 echo
 
 # ========== SYSCTL OPTIMIZATION ==========
-echo "Configuring kernel parameters for mining relay..."
+echo "Configuring kernel parameters for port relay..."
 
-cat > /etc/sysctl.d/99-mining-relay.conf <<'EOF'
-# ========== MINING RELAY OPTIMIZATION ==========
+cat > /etc/sysctl.d/99-port-relay.conf <<'EOF'
+# ========== PORT RELAY OPTIMIZATION ==========
 net.ipv4.ip_forward=1
 
 # ========== TCP TUNING FOR HIGH LATENCY ==========
@@ -114,7 +124,6 @@ net.ipv4.tcp_max_syn_backlog=4096
 # ========== RELIABILITY ==========
 net.ipv4.tcp_sack=1
 net.ipv4.tcp_dsack=1
-net.ipv4.tcp_fack=1
 net.ipv4.tcp_timestamps=1
 net.ipv4.tcp_window_scaling=1
 
@@ -124,7 +133,7 @@ net.ipv4.conf.all.rp_filter=0
 net.ipv4.conf.default.rp_filter=0
 EOF
 
-sysctl -p /etc/sysctl.d/99-mining-relay.conf > /dev/null
+sysctl -p /etc/sysctl.d/99-port-relay.conf > /dev/null
 
 echo "✓ Kernel parameters configured"
 echo
@@ -143,16 +152,17 @@ echo "Setting up relay scripts..."
 
 chmod +x "$SCRIPT_DIR/relay"
 chmod +x "$SCRIPT_DIR/monitor"
+chmod +x "$SCRIPT_DIR/uninstall" 2>/dev/null || true
 
 echo "✓ Scripts are executable"
 echo
 
 # ========== CREATE SYSTEMD SERVICE ==========
-echo "Creating systemd service (mining-relay)..."
+echo "Creating systemd service (port-relay)..."
 
-cat > /etc/systemd/system/mining-relay.service <<SERVICE_FILE
+cat > /etc/systemd/system/port-relay.service <<SERVICE_FILE
 [Unit]
-Description=Mining Pool Relay (TCP forwarding)
+Description=Port Relay (TCP forwarding)
 After=network.target
 Wants=network-online.target
 
@@ -161,17 +171,16 @@ Type=simple
 User=root
 WorkingDirectory=$SCRIPT_DIR
 
-# Run relay from project directory (loads .env automatically)
 ExecStart=$SCRIPT_DIR/relay
 
-# Restart if it crashes
 Restart=always
 RestartSec=5
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
-# Logging
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=mining-relay
+SyslogIdentifier=port-relay
 
 [Install]
 WantedBy=multi-user.target
@@ -179,14 +188,15 @@ SERVICE_FILE
 
 systemctl daemon-reload
 
-echo "✓ Systemd service created: mining-relay"
+echo "✓ Systemd service created: port-relay"
 echo
 
 # ========== CONFIGURE FIREWALL ==========
 echo "Configuring firewall rules..."
 
-for PORT in $PROXY_PORT_1 $PROXY_PORT_2 $PROXY_PORT_3; do
-	iptables -A INPUT -p tcp --dport $PORT -j ACCEPT 2>/dev/null || true
+for entry in "${RELAY_ENTRIES[@]}"; do
+	in_port="${entry%%:*}"
+	iptables -A INPUT -p tcp --dport "$in_port" -j ACCEPT 2>/dev/null || true
 done
 
 netfilter-persistent save 2>/dev/null || true
@@ -197,15 +207,15 @@ echo
 # ========== START SERVICE ==========
 echo "Starting relay service..."
 
-systemctl start mining-relay
+systemctl start port-relay
 
 sleep 2
 
-if systemctl is-active mining-relay > /dev/null 2>&1; then
+if systemctl is-active port-relay > /dev/null 2>&1; then
 	echo "✓ Service is RUNNING"
 else
 	echo "⚠ Service failed to start"
-	systemctl status mining-relay
+	systemctl status port-relay
 	exit 1
 fi
 
@@ -213,11 +223,11 @@ echo
 
 # ========== FINAL OUTPUT ==========
 echo "========================================"
-echo "✓ Setup Complete!"
+echo "✓ Install Complete!"
 echo "========================================"
 echo
 echo "Service Information:"
-echo "  Name: mining-relay"
+echo "  Name: port-relay"
 echo "  Status: RUNNING"
 echo "  Auto-start: ENABLED"
 echo
@@ -225,23 +235,20 @@ echo "Configuration:"
 echo "  Config: $SCRIPT_DIR/.env"
 echo "  Logs: $SCRIPT_DIR/logs/relay.log"
 echo
-echo "Relay Ports:"
-echo "  Miner 1: $DEFAULT_IP:$PROXY_PORT_1 → $POOL_HOST:$POOL_PORT_1"
-echo "  Miner 2: $DEFAULT_IP:$PROXY_PORT_2 → $POOL_HOST:$POOL_PORT_2"
-echo "  Miner 3: $DEFAULT_IP:$PROXY_PORT_3 → $POOL_HOST:$POOL_PORT_3"
-echo
-echo "Miner Configuration:"
-echo "  Pool 1 URL: $DEFAULT_IP:$PROXY_PORT_1"
-echo "  Pool 1 Worker: user1"
-echo "  Pool 1 Password: x"
-echo
-echo "  (Use user2, user3 for additional miners)"
+echo "Relays (in_port → out_host:out_port):"
+idx=1
+for entry in "${RELAY_ENTRIES[@]}"; do
+	IFS=':' read -r in_port out_port out_host <<< "$entry"
+	echo "  $idx: $DEFAULT_IP:$in_port → $out_host:$out_port"
+	((idx++))
+done
+echo "  Connect to $DEFAULT_IP:<in_port> for each relay."
 echo
 echo "Useful Commands:"
-echo "  systemctl status mining-relay"
-echo "  systemctl start mining-relay"
-echo "  systemctl stop mining-relay"
-echo "  systemctl restart mining-relay"
+echo "  systemctl status port-relay"
+echo "  systemctl start port-relay"
+echo "  systemctl stop port-relay"
+echo "  systemctl restart port-relay"
 echo "  tail -f $SCRIPT_DIR/logs/relay.log"
 echo "  $SCRIPT_DIR/monitor"
 echo

@@ -1,64 +1,30 @@
-# Mining Pool Relay
+# Port Relay
 
-TCP relay proxy for mining pools, optimized for low-bandwidth and high-latency networks.
+TCP relay: входящий порт → исходящий хост:порт.
 
 ## What is This?
 
-A transparent TCP relay that forwards miner connections to a mining pool.
-
-```
-Miner (GPRS/EDGE - unstable)
-  ↓
-relay (TCP forwarder - stable internet)
-  ↓
-Mining Pool (btc.trustpool.cc)
-```
-
-No job caching, no share manipulation - 100% pool-friendly.
+Прозрачный TCP relay: клиент подключается к локальному порту, трафик пересылается на заданный хост:порт. Трафик 1:1 без изменений.
 
 ## Architecture
 
 ```
-Miners (GPRS/EDGE, unreliable)
+Clients
 │
-├─ Miner 1  →  :50025
-├─ Miner 2  →  :50443
-├─ Miner 3  →  :53333
-│
-↓
-Mining Relay Service (socat TCP forwarding)
-│
-├─ Instance 1  →  :50025  →  btc.trustpool.cc:25
-├─ Instance 2  →  :50443  →  btc.trustpool.cc:443
-├─ Instance 3  →  :53333  →  btc.trustpool.cc:3333
+├─ Relay 1  →  :50025  →  btc.trustpool.cc:25
+├─ Relay 2  →  :50443  →  btc.trustpool.cc:443
+├─ Relay 3  →  :53333  →  btc.trustpool.cc:3333
 │
 ↓
-Mining Pool (btc.trustpool.cc)
+port-relay (socat TCP forwarding)
 ```
 
 ## How It Works
 
-1. Miner connects to relay on local port (e.g., :53333)
-2. Relay immediately forwards to pool (e.g., btc.trustpool.cc:3333)
-3. All traffic relayed 1:1 - no modifications, no caching
-4. Relay stays connected to pool even if miner disconnects
-
-## Benefits for GPRS/EDGE Networks
-
-Problem: High latency
-Solution: Relay closer to miner, lower RTT
-
-Problem: Packet loss
-Solution: Large TCP buffers (16MB) absorb losses
-
-Problem: Connection drops
-Solution: Keep-alive detects and recovers quickly
-
-Problem: Frequent disconnects
-Solution: Relay maintains pool connection, miner just reconnects
-
-Problem: Stale shares
-Solution: Lower latency = fresher jobs
+1. Клиент подключается к relay на локальный порт (например :53333)
+2. Relay пересылает на заданный хост:порт
+3. Трафик 1:1 без изменений
+4. Relay держит соединение с целевым хостом при отключении клиента
 
 ## Quick Start
 
@@ -82,55 +48,27 @@ nano .env
 ### Step 3: Install
 
 ```bash
-sudo ./setup
+sudo ./install
 ```
 
 This will:
 - Install dependencies (socat, etc)
 - Configure kernel parameters (TCP optimization)
-- Create systemd service mining-relay
+- Create systemd service port-relay
 - Create logs/ directory
 - Start the relay service
 
 ### Step 4: Verify Service is Running
 
 ```bash
-systemctl status mining-relay
+systemctl status port-relay
 ```
 
 Expected: active (running)
 
-### Step 5: Configure Miners
+### Step 5: Подключение к relay
 
-Set miner pool settings to relay address.
-
-Pool 1:
-
-```
-URL: RELAY_IP:50025
-Worker: user1
-Password: x
-```
-
-Pool 2:
-
-```
-URL: RELAY_IP:50443
-Worker: user1
-Password: x
-```
-
-Pool 3:
-
-```
-URL: RELAY_IP:53333
-Worker: user1
-Password: x
-```
-
-For second miner, use user2 as worker. For third, use user3.
-
-Get RELAY_IP from:
+Подключаться к RELAY_IP:входящий_порт для каждого relay (см. вывод install). Узнать IP:
 
 ```bash
 hostname -I
@@ -145,9 +83,9 @@ Real-time status:
 ```
 
 Shows:
-- Pool connectivity (UP/DOWN)
+- Outbound connectivity (UP/DOWN)
 - Service status
-- Number of miner connections
+- Connections per relay
 - Recent logs
 
 ## Files Structure
@@ -157,47 +95,52 @@ mining-proxy/
 ├── .env              # Configuration
 ├── relay             # TCP relay application
 ├── monitor           # Real-time monitoring
-├── setup             # Installation script
+├── install           # Installation script
+├── uninstall         # Uninstall script
 ├── logs/             # Relay logs
 └── README.md         # This file
 ```
 
 ## Configuration (.env)
 
-All settings in one file:
+Формат RELAY_N: входящий_порт,исходящий_порт,исходящий_хост. Количество RELAY_* неограничено.
 
 ```
-POOL_HOST="btc.trustpool.cc"
-POOL_PORT_1="25"
-POOL_PORT_2="443"
-POOL_PORT_3="3333"
+RELAY_1="50025,25,btc.trustpool.cc"
+RELAY_2="50443,443,btc.trustpool.cc"
+RELAY_3="53333,3333,btc.trustpool.cc"
 
-PROXY_PORT_1="50025"
-PROXY_PORT_2="50443"
-PROXY_PORT_3="53333"
+CONNECT_TIMEOUT=15
+KEEPALIVE_IDLE=30
+KEEPALIVE_INTVL=10
+KEEPALIVE_CNT=3
 
 ENABLE_LOGGING="y"
 ENABLE_HEALTH_CHECK="n"
 ```
 
-### Changing Pool
+Опционально: CONNECT_TIMEOUT — таймаут подключения к целевому хосту (сек). KEEPALIVE_* — параметры TCP keepalive на сокетах (для нестабильных каналов: меньше KEEPALIVE_IDLE — быстрее обнаружение обрыва). По умолчанию используются значения выше, если переменные не заданы.
 
-Edit .env:
+Пример разных хостов:
 
 ```
-POOL_HOST="different-pool.com"
+RELAY_1="50025,25,btc.trustpool.cc"
+RELAY_2="443,443,yandex.ru"
+RELAY_3="50443,50443,y.lumpov.ru"
 ```
 
-Restart service:
+### Изменение конфигурации
+
+Редактировать .env и перезапустить:
 
 ```bash
-sudo systemctl restart mining-relay
+sudo systemctl restart port-relay
 ```
 
 ## Port Mapping
 
 ```
-Miner Connects To        Relay Forwards To
+Connect To (relay)      Relay Forwards To
 relay_ip:50025      →    btc.trustpool.cc:25
 relay_ip:50443      →    btc.trustpool.cc:443
 relay_ip:53333      →    btc.trustpool.cc:3333
@@ -205,40 +148,38 @@ relay_ip:53333      →    btc.trustpool.cc:3333
 
 ## Systemd Service
 
-The relay runs as a systemd service named mining-relay.
-
-Created by: setup script during installation
+Сервис systemd: port-relay. Создаётся скриптом install.
 
 ### Commands
 
 Check status:
 
 ```bash
-systemctl status mining-relay
+systemctl status port-relay
 ```
 
 View logs:
 
 ```bash
-journalctl -u mining-relay -n 50 -f
+journalctl -u port-relay -n 50 -f
 ```
 
 Start service:
 
 ```bash
-systemctl start mining-relay
+systemctl start port-relay
 ```
 
 Stop service:
 
 ```bash
-systemctl stop mining-relay
+systemctl stop port-relay
 ```
 
 Restart service:
 
 ```bash
-systemctl restart mining-relay
+systemctl restart port-relay
 ```
 
 ## Logging
@@ -256,13 +197,12 @@ tail -f logs/relay.log
 Example output:
 
 ```
-[2024-01-15 10:05:30] Mining Pool Relay Started
-[2024-01-15 10:05:30] Pool: btc.trustpool.cc
+[2024-01-15 10:05:30] Port Relay Started
 [2024-01-15 10:05:30] Port mapping:
 [2024-01-15 10:05:30]   Local :50025 → btc.trustpool.cc:25
 [2024-01-15 10:05:30] Starting relay instances...
-[2024-01-15 10:05:30] Relay instance 1 started (PID: 12345)
-[2024-01-15 10:05:32] Connection from miner 192.168.1.100:45234
+[2024-01-15 10:05:30] Relay started (PID: 12345)
+[2024-01-15 10:05:32] Connection from 192.168.1.100:45234
 ```
 
 ### Systemd Logs
@@ -270,7 +210,7 @@ Example output:
 View:
 
 ```bash
-journalctl -u mining-relay -f
+journalctl -u port-relay -f
 ```
 
 ### Disable Logging
@@ -290,9 +230,9 @@ ENABLE_LOGGING="n"
 ```
 
 Updates every 5 seconds. Shows:
-- Pool connectivity (UP/DOWN for each port)
+- Outbound connectivity (UP/DOWN for each relay)
 - Service status (RUNNING/STOPPED)
-- Number of miner connections on each port
+- Connections per relay
 - Last 5 log entries
 
 ### Check Connections
@@ -310,13 +250,13 @@ ss -tn | grep :50
 Check status:
 
 ```bash
-sudo systemctl status mining-relay
+sudo systemctl status port-relay
 ```
 
 View error details:
 
 ```bash
-sudo journalctl -u mining-relay -n 100
+sudo journalctl -u port-relay -n 100
 ```
 
 Common issues:
@@ -324,9 +264,9 @@ Common issues:
 - Permission denied (use sudo)
 - .env file missing
 
-### Can't Connect to Pool
+### Can't Connect to Target
 
-Test pool connectivity:
+Test target connectivity:
 
 ```bash
 nc -zv btc.trustpool.cc 25
@@ -335,7 +275,7 @@ nc -zv btc.trustpool.cc 3333
 ```
 
 If all fail: Check internet connection
-If some fail: Some pool ports might be down
+If some fail: Target ports might be down
 
 ### Relay Not Forwarding Traffic
 
@@ -353,7 +293,7 @@ Check relay logs:
 tail -50 logs/relay.log
 ```
 
-### No Miner Connections
+### No Connections
 
 Check relay is listening on correct ports:
 
@@ -361,7 +301,7 @@ Check relay is listening on correct ports:
 netstat -tlnp | grep -E "(50025|50443|53333)"
 ```
 
-Check miner is connecting to relay IP (not pool IP):
+Check client is connecting to relay IP:
 
 ```bash
 telnet RELAY_IP 53333
@@ -369,15 +309,13 @@ telnet RELAY_IP 53333
 
 Should connect. If not, firewall might be blocking.
 
-### High Reject Rate
+### High Latency
 
 Check latency:
 
 ```bash
 ping btc.trustpool.cc
 ```
-
-High latency (>500ms) = adjust pool difficulty on miner
 
 Check for packet loss:
 
@@ -401,64 +339,46 @@ sudo ufw allow 53333
 
 ### Kernel Optimizations
 
-Configured by setup script in /etc/sysctl.d/99-mining-relay.conf:
+Configured by install in /etc/sysctl.d/99-port-relay.conf:
 
 - BBR TCP congestion control
 - Large buffers (16MB)
-- TCP keep-alive
+- TCP keep-alive (sysctl)
 - Window scaling
 - SACK (Selective acknowledgment)
-- MSS clamping (prevents fragmentation)
+- MTU probing (prevents fragmentation)
 
-### Expected Improvements
+### Relay (socat)
 
-Compared to connecting miners directly to pool:
-
-Without Relay:
-- Latency: 500-2000ms
-- Stale shares: 5-15%
-- Disconnects/hour: 20-50
-- Efficiency: 80-85%
-
-With Relay:
-- Latency: 50-200ms
-- Stale shares: 1-3%
-- Disconnects/hour: 1-5
-- Efficiency: 95-98%
+На сокетах включены keepalive и таймаут подключения к целевому хосту (CONNECT_TIMEOUT, KEEPALIVE_* в .env). Ускоряют обнаружение мёртвых соединений на нестабильных каналах.
 
 ## Advanced Usage
 
-### Multiple Pools (Failover)
+### Multiple Hosts
 
-To failover between pools, set 3 pools in each miner:
-- Pool 1: relay:50025
-- Pool 2: relay:50443
-- Pool 3: relay:53333
+Каждая RELAY_* может указывать на свой хост. Пример:
 
-But relay always points to same pool.
-
-For different pool, edit .env and restart:
-
-```bash
-nano .env
-POOL_HOST="different-pool.com"
-sudo systemctl restart mining-relay
 ```
+RELAY_1="50025,25,btc.trustpool.cc"
+RELAY_2="50443,443,y.lumpov.ru"
+RELAY_3="443,443,yandex.ru"
+```
+
+Для изменения конфигурации редактировать .env и перезапустить сервис.
 
 ### Custom Ports
 
-Edit .env:
+Edit .env (format: incoming_port,outgoing_port,outgoing_host):
 
 ```
-PROXY_PORT_1="9001"
-PROXY_PORT_2="9002"
-PROXY_PORT_3="9003"
+RELAY_1="9001,25,btc.trustpool.cc"
+RELAY_2="9002,443,btc.trustpool.cc"
 ```
 
 Restart:
 
 ```bash
-sudo systemctl restart mining-relay
+sudo systemctl restart port-relay
 ```
 
 ## Maintenance
@@ -468,13 +388,13 @@ sudo systemctl restart mining-relay
 Check service is running:
 
 ```bash
-systemctl status mining-relay
+systemctl status port-relay
 ```
 
 Check for errors:
 
 ```bash
-journalctl -u mining-relay -p err
+journalctl -u port-relay -p err
 ```
 
 Monitor connections:
@@ -489,57 +409,31 @@ Monitor connections:
 2. Restart service:
 
 ```bash
-sudo systemctl restart mining-relay
+sudo systemctl restart port-relay
 ```
 
 ### Uninstall
 
-Stop service:
-
 ```bash
-sudo systemctl stop mining-relay
+sudo ./uninstall
 ```
 
-Disable auto-start:
-
-```bash
-sudo systemctl disable mining-relay
-```
-
-Remove service file:
-
-```bash
-sudo rm /etc/systemd/system/mining-relay.service
-sudo systemctl daemon-reload
-```
-
-Remove sysctl config:
-
-```bash
-sudo rm /etc/sysctl.d/99-mining-relay.conf
-sudo sysctl -p
-```
-
-Remove project (optional):
-
-```bash
-rm -rf mining-proxy
-```
+Останавливает сервис, удаляет unit и sysctl. Файлы проекта не удаляются. Удалить каталог при необходимости вручную.
 
 ## Security Notes
 
 - Relay is transparent TCP forwarder - no encryption
-- Use VPN if you need encryption for pool credentials
+- Use VPN if you need encryption for traffic
 - Relay runs as root (required for low ports)
 - Firewall ports if relay server is exposed to internet
 
 ## System Requirements
 
 OS: Debian 11, 12 or Ubuntu 22, 24
-Privileges: Root (for setup)
+Privileges: Root (for install)
 Disk space: ~100MB
 Memory: <50MB
-Network: TCP connectivity to pool
+Network: TCP connectivity to target hosts
 
 ## Features
 
@@ -554,7 +448,7 @@ Supported:
 - Large buffers for packet loss
 - TCP keep-alive for unstable networks
 - Automatic restart on crash
-- Pool-friendly (no blocking risk)
+- Transparent forwarding (no protocol modification)
 
 Not supported:
 - Job caching
@@ -569,7 +463,7 @@ Check logs:
 
 ```bash
 tail -f logs/relay.log
-journalctl -u mining-relay -f
+journalctl -u port-relay -f
 ```
 
 Common issues in Troubleshooting section above.

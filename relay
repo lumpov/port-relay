@@ -1,17 +1,12 @@
 #!/bin/bash
 
-# ========== MINING POOL RELAY ==========
-# 
-# TCP relay application for mining pools
-# 
-# What it does:
-#   Miner connects to: proxy_server:53333
-#   ↓
-#   relay receives via socat
-#   ↓
-#   relay forwards to: btc.trustpool.cc:3333
-#   ↓
-#   All traffic relayed 1:1 (100% transparent, no changes)
+# ========== PORT RELAY ==========
+#
+# TCP relay: входящий порт → исходящий хост:порт
+#
+# Клиент подключается к relay_server:53333
+# relay принимает через socat и пересылает на заданный хост:порт
+# Трафик 1:1 без изменений
 #
 
 set -e
@@ -30,6 +25,26 @@ source "$SCRIPT_DIR/.env"
 mkdir -p "$SCRIPT_DIR/logs"
 LOG_FILE="$SCRIPT_DIR/logs/relay.log"
 
+# ========== PARSE RELAY CONFIGURATION ==========
+RELAY_ENTRIES=()
+for key in $(printf '%s\n' "${!RELAY_@}" | grep -E '^RELAY_[0-9]+$' | sort -V); do
+	value="${!key}"
+	IFS=',' read -r in_port out_port out_host <<< "$value"
+	if [[ -n "$in_port" && -n "$out_port" && -n "$out_host" ]]; then
+		RELAY_ENTRIES+=("$in_port:$out_port:$out_host")
+	fi
+done
+
+if [[ ${#RELAY_ENTRIES[@]} -eq 0 ]]; then
+	echo "Error: No valid RELAY_* entries found in .env (format: incoming_port,outgoing_port,outgoing_host)"
+	exit 1
+fi
+
+CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-15}"
+KEEPALIVE_IDLE="${KEEPALIVE_IDLE:-30}"
+KEEPALIVE_INTVL="${KEEPALIVE_INTVL:-10}"
+KEEPALIVE_CNT="${KEEPALIVE_CNT:-3}"
+
 # ========== LOGGING FUNCTION ==========
 log_msg() {
 	local msg="[$(date +'%Y-%m-%d %H:%M:%S')] $1"
@@ -42,7 +57,7 @@ log_msg() {
 }
 
 # ========== HEALTH CHECK FUNCTION ==========
-check_pool() {
+check_target() {
 	local host="$1"
 	local port="$2"
 	
@@ -55,25 +70,25 @@ check_pool() {
 
 # ========== START LOGGING ==========
 log_msg "========================================="
-log_msg "Mining Pool Relay Started"
+log_msg "Port Relay Started"
 log_msg "========================================="
-log_msg "Pool: $POOL_HOST"
 log_msg "Port mapping:"
-log_msg "  Local :$PROXY_PORT_1 → $POOL_HOST:$POOL_PORT_1"
-log_msg "  Local :$PROXY_PORT_2 → $POOL_HOST:$POOL_PORT_2"
-log_msg "  Local :$PROXY_PORT_3 → $POOL_HOST:$POOL_PORT_3"
+for entry in "${RELAY_ENTRIES[@]}"; do
+	IFS=':' read -r in_port out_port out_host <<< "$entry"
+	log_msg "  Local :$in_port → $out_host:$out_port"
+done
 log_msg "Logging: $ENABLE_LOGGING"
 log_msg "Health Checks: $ENABLE_HEALTH_CHECK"
 
 # ========== INITIAL HEALTH CHECK ==========
 if [[ "$ENABLE_HEALTH_CHECK" == "y" ]]; then
 	log_msg "Performing initial health check..."
-	
-	for port in $POOL_PORT_1 $POOL_PORT_2 $POOL_PORT_3; do
-		if check_pool "$POOL_HOST" "$port"; then
-			log_msg "✓ Pool $POOL_HOST:$port - REACHABLE"
+	for entry in "${RELAY_ENTRIES[@]}"; do
+		IFS=':' read -r in_port out_port out_host <<< "$entry"
+		if check_target "$out_host" "$out_port"; then
+			log_msg "✓ $out_host:$out_port - REACHABLE"
 		else
-			log_msg "⚠ Pool $POOL_HOST:$port - UNREACHABLE (warning)"
+			log_msg "⚠ $out_host:$out_port - UNREACHABLE (warning)"
 		fi
 	done
 fi
@@ -81,46 +96,33 @@ fi
 # ========== START RELAY INSTANCES ==========
 log_msg "Starting relay instances..."
 
-# Relay instance 1: Port mapping 1
-log_msg "Starting: :$PROXY_PORT_1 → $POOL_HOST:$POOL_PORT_1"
-socat \
-	TCP4-LISTEN:$PROXY_PORT_1,reuseaddr,fork,bind=0.0.0.0 \
-	TCP4:$POOL_HOST:$POOL_PORT_1 &
-RELAY_1_PID=$!
-log_msg "Relay instance 1 started (PID: $RELAY_1_PID)"
-
-# Relay instance 2: Port mapping 2
-log_msg "Starting: :$PROXY_PORT_2 → $POOL_HOST:$POOL_PORT_2"
-socat \
-	TCP4-LISTEN:$PROXY_PORT_2,reuseaddr,fork,bind=0.0.0.0 \
-	TCP4:$POOL_HOST:$POOL_PORT_2 &
-RELAY_2_PID=$!
-log_msg "Relay instance 2 started (PID: $RELAY_2_PID)"
-
-# Relay instance 3: Port mapping 3
-log_msg "Starting: :$PROXY_PORT_3 → $POOL_HOST:$POOL_PORT_3"
-socat \
-	TCP4-LISTEN:$PROXY_PORT_3,reuseaddr,fork,bind=0.0.0.0 \
-	TCP4:$POOL_HOST:$POOL_PORT_3 &
-RELAY_3_PID=$!
-log_msg "Relay instance 3 started (PID: $RELAY_3_PID)"
+RELAY_PIDS=()
+for entry in "${RELAY_ENTRIES[@]}"; do
+	IFS=':' read -r in_port out_port out_host <<< "$entry"
+	log_msg "Starting: :$in_port → $out_host:$out_port"
+	socat \
+		TCP4-LISTEN:$in_port,reuseaddr,fork,bind=0.0.0.0,keepalive,keepidle=$KEEPALIVE_IDLE,keepintvl=$KEEPALIVE_INTVL,keepcnt=$KEEPALIVE_CNT \
+		TCP4:$out_host:$out_port,connect-timeout=$CONNECT_TIMEOUT,keepalive,keepidle=$KEEPALIVE_IDLE,keepintvl=$KEEPALIVE_INTVL,keepcnt=$KEEPALIVE_CNT \
+		&
+	RELAY_PIDS+=($!)
+	log_msg "Relay started (PID: ${RELAY_PIDS[-1]})"
+done
 
 log_msg "All relay instances started!"
-log_msg "Relay ready for miner connections..."
+log_msg "Relay ready for connections..."
 log_msg "========================================="
 
 # ========== HEALTH CHECK LOOP ==========
 if [[ "$ENABLE_HEALTH_CHECK" == "y" ]]; then
 	while true; do
 		sleep 60
-		
-		for port in $POOL_PORT_1 $POOL_PORT_2 $POOL_PORT_3; do
-			if ! check_pool "$POOL_HOST" "$port"; then
-				log_msg "⚠ WARNING: Pool $POOL_HOST:$port is DOWN!"
+		for entry in "${RELAY_ENTRIES[@]}"; do
+			IFS=':' read -r in_port out_port out_host <<< "$entry"
+			if ! check_target "$out_host" "$out_port"; then
+				log_msg "⚠ WARNING: $out_host:$out_port is DOWN!"
 			fi
 		done
 	done
 else
-	# Keep running and wait for relay processes
-	wait $RELAY_1_PID $RELAY_2_PID $RELAY_3_PID
+	wait "${RELAY_PIDS[@]}"
 fi

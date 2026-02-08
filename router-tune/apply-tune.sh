@@ -1,0 +1,62 @@
+#!/bin/bash
+# Настройка PC-маршрутизатора (Fedora): очередь fq_codel на WAN, MSS clamping, базовый sysctl.
+# Скорость канала не задаётся — fq_codel без лимита подстраивается под канал.
+# Запуск: sudo ./apply-tune.sh [интерфейс_wan]
+# Интерфейс можно задать аргументом или WAN_IF=ppp0; иначе берётся из default route.
+
+set -e
+
+if [[ "$EUID" -ne 0 ]]; then
+  echo "Запуск от root: sudo $0 [$*]"
+  exit 1
+fi
+
+WAN_IF="${WAN_IF:-$1}"
+if [[ -z "$WAN_IF" ]]; then
+  WAN_IF=$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}')
+fi
+if [[ -z "$WAN_IF" ]] || ! ip link show "$WAN_IF" &>/dev/null; then
+  echo "Не удалось определить WAN-интерфейс. Задайте: $0 ppp0 или WAN_IF=ppp0 $0"
+  ip route show default 2>/dev/null || true
+  exit 2
+fi
+
+echo "WAN-интерфейс: $WAN_IF"
+echo
+
+echo "========== 1. MSS clamping (FORWARD) =========="
+if iptables -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; then
+  echo "Правило mangle FORWARD уже есть."
+else
+  iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+  echo "Правило mangle FORWARD добавлено (iptables)."
+fi
+if command -v firewall-cmd &>/dev/null && systemctl is-active firewalld &>/dev/null 2>/dev/null; then
+  firewall-cmd --permanent --direct --add-passthrough ipv4 -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null && echo "Правило добавлено в firewalld (permanent)." || true
+  firewall-cmd --reload 2>/dev/null || true
+fi
+echo
+
+echo "========== 2. Qdisc fq_codel на $WAN_IF =========="
+tc qdisc replace dev "$WAN_IF" root fq_codel
+echo "Установлено: tc qdisc replace dev $WAN_IF root fq_codel"
+echo "Важно: после переподключения модема (down/up интерфейса) qdisc сбросится — перезапустите этот скрипт или настройте запуск при поднятии интерфейса."
+echo
+
+echo "========== 3. Sysctl (минимально) =========="
+SYSCTL_CONF="/etc/sysctl.d/99-router-tune.conf"
+cat > "$SYSCTL_CONF" <<'EOF'
+net.ipv4.ip_forward=1
+net.ipv4.tcp_mtu_probing=1
+net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+net.ipv4.tcp_rmem=4096 87380 16777216
+net.ipv4.tcp_wmem=4096 65536 16777216
+EOF
+sysctl -p "$SYSCTL_CONF" >/dev/null
+echo "Записано и применено: $SYSCTL_CONF"
+echo
+
+echo "========== Готово =========="
+echo "Проверка qdisc: tc qdisc show dev $WAN_IF"
+tc qdisc show dev "$WAN_IF"

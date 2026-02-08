@@ -5,7 +5,6 @@
 
 set -e
 
-# ========== LOAD CONFIGURATION ==========
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/relay-config"
 
@@ -13,44 +12,60 @@ load_env || exit 1
 parse_relay_entries
 
 LOG_FILE="$SCRIPT_DIR/logs/relay.log"
+RELAY_TOTAL=${#RELAY_ENTRIES[@]}
+if [[ -n "${LINES:-}" && "$LINES" -gt 24 ]]; then
+	RELAY_DISPLAY_MAX=$((LINES - 18))
+else
+	RELAY_DISPLAY_MAX=25
+fi
+if [[ "$RELAY_DISPLAY_MAX" -lt 1 ]]; then
+	RELAY_DISPLAY_MAX=1
+fi
 
-# ========== MONITOR LOOP ==========
 while true; do
 	clear
 	echo "========================================"
 	echo "Port Relay Monitor"
 	echo "========================================"
 	echo
-	
 	echo "Configuration:"
 	echo "  Project: $SCRIPT_DIR"
+	echo "  Relays: $RELAY_TOTAL total"
 	echo
-	
 	echo "Outbound Connectivity:"
+	idx=0
 	for entry in "${RELAY_ENTRIES[@]}"; do
+		[[ $idx -ge $RELAY_DISPLAY_MAX ]] && break
 		IFS=':' read -r in_port out_port out_host <<< "$entry"
 		echo -n "  ✓ $out_host:$out_port: "
 		check_target "$out_host" "$out_port" 2 && echo "UP" || echo "DOWN"
+		((idx++)) || true
 	done
+	if [[ $RELAY_TOTAL -gt $RELAY_DISPLAY_MAX ]]; then
+		echo "  ... and $((RELAY_TOTAL - RELAY_DISPLAY_MAX)) more ($RELAY_TOTAL total)"
+	fi
 	echo
-	
 	echo "Relay Service Status:"
 	echo -n "  Service: "
-	if systemctl is-active port-relay > /dev/null 2>&1; then
+	if systemctl is-active "$RELAY_SERVICE_NAME" > /dev/null 2>&1; then
 		echo "✓ RUNNING"
 	else
 		echo "✗ STOPPED"
 	fi
 	echo
-	
 	echo "Connections per relay:"
+	idx=0
 	for entry in "${RELAY_ENTRIES[@]}"; do
+		[[ $idx -ge $RELAY_DISPLAY_MAX ]] && break
 		in_port="${entry%%:*}"
 		count=$(ss -tn 2>/dev/null | grep ":$in_port " | wc -l)
-		echo -n "  Port $in_port: $count connection(s)"
-		echo
+		echo "  Port $in_port: $count connection(s)"
+		((idx++)) || true
 	done
-	
+	if [[ $RELAY_TOTAL -gt $RELAY_DISPLAY_MAX ]]; then
+		echo "  ... and $((RELAY_TOTAL - RELAY_DISPLAY_MAX)) more ($RELAY_TOTAL total)"
+	fi
+	echo
 	echo "Recent Logs:"
 	if [[ -f "$LOG_FILE" ]]; then
 		tail -5 "$LOG_FILE"
@@ -58,10 +73,8 @@ while true; do
 		echo "  (No logs yet - relay not started)"
 	fi
 	echo
-	
 	echo "========================================"
 	echo "Updated every 5 seconds (Ctrl+C to exit)"
 	echo "========================================"
-	
 	sleep 5
 done

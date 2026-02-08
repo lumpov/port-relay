@@ -27,6 +27,7 @@ if [[ ${#RELAY_ENTRIES[@]} -eq 0 ]]; then
 	echo "Error: No valid RELAY_* entries found in .env (format: incoming_port,outgoing_port,outgoing_host)"
 	exit 1
 fi
+check_duplicate_ports || exit 1
 
 echo "Configuration loaded from: $SCRIPT_DIR/.env"
 echo "Relay mappings: ${#RELAY_ENTRIES[@]}"
@@ -196,9 +197,9 @@ echo "✓ Scripts are executable"
 echo
 
 # ========== CREATE SYSTEMD SERVICE ==========
-echo "Creating systemd service (port-relay)..."
+echo "Creating systemd service ($RELAY_SERVICE_NAME)..."
 
-cat > /etc/systemd/system/port-relay.service <<SERVICE_FILE
+cat > "/etc/systemd/system/${RELAY_SERVICE_NAME}.service" <<SERVICE_FILE
 [Unit]
 Description=Port Relay (TCP forwarding)
 After=network.target
@@ -218,26 +219,22 @@ StartLimitBurst=5
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=port-relay
+SyslogIdentifier=$RELAY_SERVICE_NAME
 
 [Install]
 WantedBy=multi-user.target
 SERVICE_FILE
 
 systemctl daemon-reload
+systemctl enable "$RELAY_SERVICE_NAME"
 
-echo "✓ Systemd service created: port-relay"
+echo "✓ Systemd service created: $RELAY_SERVICE_NAME"
 echo
 
 # ========== CONFIGURE FIREWALL ==========
 echo "Configuring firewall rules..."
 
-for entry in "${RELAY_ENTRIES[@]}"; do
-	in_port="${entry%%:*}"
-	iptables -A INPUT -p tcp --dport "$in_port" -j ACCEPT 2>/dev/null || true
-done
-
-netfilter-persistent save 2>/dev/null || true
+relay_firewall_apply
 
 echo "✓ Firewall rules configured"
 echo
@@ -245,15 +242,15 @@ echo
 # ========== START SERVICE ==========
 echo "Starting relay service..."
 
-systemctl start port-relay
+systemctl start "$RELAY_SERVICE_NAME"
 
 sleep 2
 
-if systemctl is-active port-relay > /dev/null 2>&1; then
+if systemctl is-active "$RELAY_SERVICE_NAME" > /dev/null 2>&1; then
 	echo "✓ Service is RUNNING"
 else
 	echo "⚠ Service failed to start"
-	systemctl status port-relay
+	systemctl status "$RELAY_SERVICE_NAME"
 	exit 1
 fi
 
@@ -265,7 +262,7 @@ echo "✓ Install Complete!"
 echo "========================================"
 echo
 echo "Service Information:"
-echo "  Name: port-relay"
+echo "  Name: $RELAY_SERVICE_NAME"
 echo "  Status: RUNNING"
 echo "  Auto-start: ENABLED"
 echo
@@ -283,10 +280,10 @@ done
 echo "  Connect to $DEFAULT_IP:<in_port> for each relay."
 echo
 echo "Useful Commands:"
-echo "  systemctl status port-relay"
-echo "  systemctl start port-relay"
-echo "  systemctl stop port-relay"
-echo "  systemctl restart port-relay"
+echo "  systemctl status $RELAY_SERVICE_NAME"
+echo "  systemctl start $RELAY_SERVICE_NAME"
+echo "  systemctl stop $RELAY_SERVICE_NAME"
+echo "  systemctl restart $RELAY_SERVICE_NAME"
 echo "  tail -f $SCRIPT_DIR/logs/relay.log"
 echo "  $SCRIPT_DIR/monitor"
 echo

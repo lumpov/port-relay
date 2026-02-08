@@ -1,5 +1,6 @@
 #!/bin/bash
 RELAY_PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RELAY_SERVICE_NAME="${RELAY_SERVICE_NAME:-port-relay}"
 
 load_env() {
 	if [[ ! -f "$RELAY_PROJECT_DIR/.env" ]]; then
@@ -21,6 +22,19 @@ parse_relay_entries() {
 	done
 }
 
+check_duplicate_ports() {
+	local seen=""
+	for entry in "${RELAY_ENTRIES[@]}"; do
+		local in_port="${entry%%:*}"
+		if [[ "$seen" == *" $in_port "* ]]; then
+			echo "Error: Duplicate incoming port $in_port in RELAY_* entries (only one listener per port)"
+			return 1
+		fi
+		seen="$seen $in_port "
+	done
+	return 0
+}
+
 check_target() {
 	local host="$1"
 	local port="$2"
@@ -30,4 +44,29 @@ check_target() {
 	else
 		return 1
 	fi
+}
+
+relay_service_stop() {
+	systemctl stop "$RELAY_SERVICE_NAME" 2>/dev/null || true
+}
+
+relay_service_disable() {
+	systemctl disable "$RELAY_SERVICE_NAME" 2>/dev/null || true
+}
+
+relay_firewall_remove() {
+	for entry in "${RELAY_ENTRIES[@]}"; do
+		in_port="${entry%%:*}"
+		iptables -D INPUT -p tcp --dport "$in_port" -j ACCEPT 2>/dev/null || true
+	done
+	netfilter-persistent save 2>/dev/null || true
+}
+
+relay_firewall_apply() {
+	for entry in "${RELAY_ENTRIES[@]}"; do
+		in_port="${entry%%:*}"
+		iptables -D INPUT -p tcp --dport "$in_port" -j ACCEPT 2>/dev/null || true
+		iptables -A INPUT -p tcp --dport "$in_port" -j ACCEPT 2>/dev/null || true
+	done
+	netfilter-persistent save 2>/dev/null || true
 }

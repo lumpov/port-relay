@@ -21,6 +21,7 @@ if [[ ${#RELAY_ENTRIES[@]} -eq 0 ]]; then
 	echo "Error: No valid RELAY_* entries found in .env (format: incoming_port,outgoing_port,outgoing_host)"
 	exit 1
 fi
+check_duplicate_ports || exit 1
 
 # ========== CREATE LOGS DIRECTORY ==========
 mkdir -p "$SCRIPT_DIR/logs"
@@ -86,9 +87,25 @@ log_msg "All relay instances started!"
 log_msg "Relay ready for connections..."
 log_msg "========================================="
 
-# ========== HEALTH CHECK LOOP ==========
+cleanup() {
+	local code="${1:-0}"
+	log_msg "Shutting down relay..."
+	for pid in "${RELAY_PIDS[@]}"; do
+		kill -TERM "$pid" 2>/dev/null || true
+	done
+	wait "${RELAY_PIDS[@]}" 2>/dev/null || true
+	exit "$code"
+}
+trap 'cleanup 0' SIGTERM SIGINT
+
 if [[ "$ENABLE_HEALTH_CHECK" == "y" ]]; then
 	while true; do
+		for pid in "${RELAY_PIDS[@]}"; do
+			if ! kill -0 "$pid" 2>/dev/null; then
+				log_msg "Relay process $pid died, exiting for systemd restart"
+				cleanup 1
+			fi
+		done
 		sleep 60
 		for entry in "${RELAY_ENTRIES[@]}"; do
 			IFS=':' read -r in_port out_port out_host <<< "$entry"

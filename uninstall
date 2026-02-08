@@ -15,15 +15,15 @@ fi
 
 load_env 2>/dev/null && parse_relay_entries || RELAY_ENTRIES=()
 
-echo "Stopping port-relay..."
-systemctl stop port-relay 2>/dev/null || true
+echo "Stopping $RELAY_SERVICE_NAME..."
+relay_service_stop
 
-echo "Disabling port-relay..."
-systemctl disable port-relay 2>/dev/null || true
+echo "Disabling $RELAY_SERVICE_NAME..."
+relay_service_disable
 
-if [[ -f /etc/systemd/system/port-relay.service ]]; then
+if [[ -f /etc/systemd/system/${RELAY_SERVICE_NAME}.service ]]; then
 	echo "Removing systemd service..."
-	rm -f /etc/systemd/system/port-relay.service
+	rm -f "/etc/systemd/system/${RELAY_SERVICE_NAME}.service"
 	systemctl daemon-reload
 	echo "✓ Service removed"
 fi
@@ -37,11 +37,7 @@ fi
 
 if [[ ${#RELAY_ENTRIES[@]} -gt 0 ]]; then
 	echo "Removing firewall rules..."
-	for entry in "${RELAY_ENTRIES[@]}"; do
-		in_port="${entry%%:*}"
-		iptables -D INPUT -p tcp --dport "$in_port" -j ACCEPT 2>/dev/null || true
-	done
-	netfilter-persistent save 2>/dev/null || true
+	relay_firewall_remove
 	echo "✓ Firewall rules removed"
 fi
 

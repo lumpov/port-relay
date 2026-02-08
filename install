@@ -315,7 +315,13 @@ for entry in "${RELAY_ENTRIES[@]}"; do
 	echo "  $idx: $DEFAULT_IP:$in_port → $out_host:$out_port"
 	((idx++))
 done
-echo "  Connect to $DEFAULT_IP:<in_port> for each relay."
+echo "  Listen: 0.0.0.0 (all interfaces). Local/VPC address: $DEFAULT_IP"
+PUBLIC_IP="$(curl -s --max-time 3 -4 ifconfig.me 2>/dev/null || true)"
+if [[ -n "$PUBLIC_IP" ]]; then
+	echo "  For miners from internet use PUBLIC IP: $PUBLIC_IP (open relay ports in cloud Security Groups)"
+else
+	echo "  For miners from internet use this host PUBLIC IP (open relay ports in cloud Security Groups)"
+fi
 echo
 echo "Useful Commands:"
 echo "  systemctl status $RELAY_SERVICE_NAME"

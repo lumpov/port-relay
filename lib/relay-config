@@ -48,13 +48,13 @@ check_target() {
 		run_timeout() { shift; "$@"; }
 	fi
 	while [[ $attempt -le $retries ]]; do
+		if run_timeout "$timeout" /bin/bash -c "echo -n '' > /dev/tcp/$host/$port" 2>/dev/null; then
+			return 0
+		fi
 		if command -v nc >/dev/null 2>&1; then
 			if run_timeout "$((timeout + 2))" nc -4 -z -w "$timeout" "$host" "$port" 2>/dev/null; then
 				return 0
 			fi
-		fi
-		if run_timeout "$timeout" bash -c "echo -n '' > /dev/tcp/$host/$port" 2>/dev/null; then
-			return 0
 		fi
 		((attempt++)) || true
 	done

@@ -60,7 +60,7 @@ if [[ "$ENABLE_HEALTH_CHECK" == "y" ]]; then
 	log_msg "Performing initial health check..."
 	for entry in "${RELAY_ENTRIES[@]}"; do
 		IFS=':' read -r in_port out_port out_host <<< "$entry"
-		if check_target "$out_host" "$out_port" 5; then
+		if check_target "$out_host" "$out_port" "${HEALTH_CHECK_TIMEOUT:-10}" "${HEALTH_CHECK_RETRIES:-3}"; then
 			log_msg "✓ $out_host:$out_port - REACHABLE"
 		else
 			log_msg "⚠ $out_host:$out_port - UNREACHABLE (warning)"
@@ -109,7 +109,7 @@ if [[ "$ENABLE_HEALTH_CHECK" == "y" ]]; then
 		sleep 60
 		for entry in "${RELAY_ENTRIES[@]}"; do
 			IFS=':' read -r in_port out_port out_host <<< "$entry"
-			if ! check_target "$out_host" "$out_port" 5; then
+			if ! check_target "$out_host" "$out_port" "${HEALTH_CHECK_TIMEOUT:-10}" "${HEALTH_CHECK_RETRIES:-3}"; then
 				log_msg "⚠ WARNING: $out_host:$out_port is DOWN!"
 			fi
 		done

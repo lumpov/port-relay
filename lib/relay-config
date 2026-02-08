@@ -39,11 +39,20 @@ check_target() {
 	local host="$1"
 	local port="$2"
 	local timeout="${3:-5}"
-	if timeout "$timeout" bash -c "echo -n '' > /dev/tcp/$host/$port" 2>/dev/null; then
-		return 0
-	else
-		return 1
-	fi
+	local retries="${4:-3}"
+	local attempt=1
+	while [[ $attempt -le $retries ]]; do
+		if command -v nc >/dev/null 2>&1; then
+			if timeout "$((timeout + 2))" nc -4 -z -w "$timeout" "$host" "$port" 2>/dev/null; then
+				return 0
+			fi
+		fi
+		if timeout "$timeout" bash -c "echo -n '' > /dev/tcp/$host/$port" 2>/dev/null; then
+			return 0
+		fi
+		((attempt++)) || true
+	done
+	return 1
 }
 
 relay_service_stop() {

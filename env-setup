@@ -1,0 +1,79 @@
+#!/bin/bash
+set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXAMPLE="$SCRIPT_DIR/.env.example"
+ENVFILE="$SCRIPT_DIR/.env"
+
+if [[ ! -f "$EXAMPLE" ]]; then
+	echo "Error: .env.example not found"
+	exit 1
+fi
+
+if [[ ! -f "$ENVFILE" ]]; then
+	cp "$EXAMPLE" "$ENVFILE"
+	echo ".env created from .env.example"
+	exit 0
+fi
+
+declare -A example_key_to_line
+example_keys_order=()
+while IFS= read -r line || [[ -n "$line" ]]; do
+	trimmed="${line#"${line%%[![:space:]]*}"}"
+	trimmed="${trimmed%%#*}"
+	trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+	if [[ "$trimmed" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+		key="${trimmed%%=*}"
+		example_key_to_line[$key]="$line"
+		example_keys_order+=("$key")
+	fi
+done < "$EXAMPLE"
+
+declare -A env_active_keys
+while IFS= read -r line || [[ -n "$line" ]]; do
+	trimmed="${line#"${line%%[![:space:]]*}"}"
+	trimmed="${trimmed%%#*}"
+	trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+	if [[ "$trimmed" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+		key="${trimmed%%=*}"
+		env_active_keys[$key]=1
+	fi
+done < "$ENVFILE"
+
+commented_out=()
+added=()
+tmp=$(mktemp)
+while IFS= read -r line || [[ -n "$line" ]]; do
+	trimmed="${line#"${line%%[![:space:]]*}"}"
+	trimmed="${trimmed%%#*}"
+	trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+	if [[ "$trimmed" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+		key="${trimmed%%=*}"
+		if [[ -z "${example_key_to_line[$key]+x}" ]]; then
+			commented_out+=("$key")
+			echo "# $line" >> "$tmp"
+		else
+			echo "$line" >> "$tmp"
+		fi
+	else
+		echo "$line" >> "$tmp"
+	fi
+done < "$ENVFILE"
+
+for key in "${example_keys_order[@]}"; do
+	if [[ -z "${env_active_keys[$key]+x}" ]]; then
+		added+=("$key")
+		echo "${example_key_to_line[$key]}" >> "$tmp"
+	fi
+done
+
+mv "$tmp" "$ENVFILE"
+echo ".env updated"
+if [[ ${#commented_out[@]} -gt 0 ]]; then
+	echo "Commented out (not in .env.example): ${commented_out[*]}"
+fi
+if [[ ${#added[@]} -gt 0 ]]; then
+	echo "Added (from .env.example): ${added[*]}"
+fi
+if [[ ${#commented_out[@]} -eq 0 && ${#added[@]} -eq 0 ]]; then
+	echo "No changes (already in sync)"
+fi

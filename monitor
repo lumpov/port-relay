@@ -38,7 +38,7 @@ while true; do
 		[[ $idx -ge $RELAY_DISPLAY_MAX ]] && break
 		IFS=':' read -r in_port out_port out_host <<< "$entry"
 		echo -n "  ✓ $out_host:$out_port: "
-		check_target "$out_host" "$out_port" 2 && echo "UP" || echo "DOWN"
+		check_target "$out_host" "$out_port" "${HEALTH_CHECK_TIMEOUT:-5}" "${HEALTH_CHECK_RETRIES:-3}" && echo "UP" || echo "DOWN"
 		((idx++)) || true
 	done
 	if [[ $RELAY_TOTAL -gt $RELAY_DISPLAY_MAX ]]; then
@@ -47,10 +47,14 @@ while true; do
 	echo
 	echo "Relay Service Status:"
 	echo -n "  Service: "
-	if systemctl is-active "$RELAY_SERVICE_NAME" > /dev/null 2>&1; then
-		echo "✓ RUNNING"
+	if command -v systemctl >/dev/null 2>&1; then
+		if systemctl is-active "$RELAY_SERVICE_NAME" > /dev/null 2>&1; then
+			echo "✓ RUNNING"
+		else
+			echo "✗ STOPPED"
+		fi
 	else
-		echo "✗ STOPPED"
+		echo "N/A (no systemd)"
 	fi
 	echo
 	echo "Connections per relay:"
@@ -58,8 +62,12 @@ while true; do
 	for entry in "${RELAY_ENTRIES[@]}"; do
 		[[ $idx -ge $RELAY_DISPLAY_MAX ]] && break
 		in_port="${entry%%:*}"
-		count=$(ss -tn 2>/dev/null | grep ":$in_port " | wc -l)
-		echo "  Port $in_port: $count connection(s)"
+		if command -v ss >/dev/null 2>&1; then
+			count=$(ss -tn 2>/dev/null | grep ":$in_port " | wc -l)
+			echo "  Port $in_port: $count connection(s)"
+		else
+			echo "  Port $in_port: N/A (run on relay server)"
+		fi
 		((idx++)) || true
 	done
 	if [[ $RELAY_TOTAL -gt $RELAY_DISPLAY_MAX ]]; then
@@ -70,7 +78,7 @@ while true; do
 	if [[ -f "$LOG_FILE" ]]; then
 		tail -5 "$LOG_FILE"
 	else
-		echo "  (No logs yet - relay not started)"
+		echo "  (No logs - relay not running here)"
 	fi
 	echo
 	echo "========================================"
